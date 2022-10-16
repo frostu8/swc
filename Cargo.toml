@@ -1,0 +1,16 @@
+[package]
+name = "swc"
+version = "0.1.0"
+authors = ["frostu8 <frostu8@protonmail.com>"]
+edition = "2021"
+
+[dependencies]
+twilight-model = "0.13"
+twilight-http = "0.13"
+twilight-gateway = "0.13"
+twilight-cache-inmemory = "0.13"
+tokio = "1.21"
+
+dotenv = "0.15"
+log = "0.4"
+env_logger = "0.9"
