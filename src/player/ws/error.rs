@@ -49,6 +49,13 @@ pub struct ApiError {
     pub message: String,
 }
 
+impl ApiError {
+    /// Checks if the error was a normal disconnection error.
+    pub fn disconnected(&self) -> bool {
+        matches!(self.code, Code::Disconnected)
+    }
+}
+
 impl Display for ApiError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "#{:?}: {}", self.code, self.message)

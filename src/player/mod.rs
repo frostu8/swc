@@ -215,6 +215,10 @@ async fn run(
                     Ok(None) => {
                         break;
                     }
+                    Err(ws::error::Error::Api(error)) if error.disconnected() => {
+                        debug!("forcibly disconnected from voice");
+                        break;
+                    }
                     Err(err) => {
                         error!("ws error: {}", err);
                         break;
