@@ -25,6 +25,7 @@ pub enum Event {
     Resume(Resume),
     Hello(Hello),
     Resumed,
+    ClientDisconnect(ClientDisconnect),
 }
 
 #[derive(Debug, Deserialize_repr, Serialize_repr)]
@@ -40,6 +41,7 @@ pub enum OpCode {
     Resume = 7,
     Hello = 8,
     Resumed = 9,
+    ClientDisconnect = 13
 }
 
 impl Event {
@@ -56,6 +58,7 @@ impl Event {
             Event::Resume(_) => OpCode::Resume,
             Event::Hello(_) => OpCode::Hello,
             Event::Resumed => OpCode::Resumed,
+            Event::ClientDisconnect(_) => OpCode::ClientDisconnect,
         }
     }
 }
@@ -79,6 +82,7 @@ impl Serialize for Event {
             Event::Resume(ev) => event.serialize_field("d", ev)?,
             Event::Hello(ev) => event.serialize_field("d", ev)?,
             Event::Resumed => event.serialize_field("d", &None::<()>)?,
+            Event::ClientDisconnect(ev) => event.serialize_field("d", ev)?,
         };
 
         event.end()
@@ -186,6 +190,7 @@ impl<'de> DeserializeSeed<'de> for EventDeserializer {
                     OpCode::Resume => self.get_d(map).map(Event::Resume),
                     OpCode::Hello => self.get_d(map).map(Event::Hello),
                     OpCode::Resumed => Ok(Event::Resumed),
+                    OpCode::ClientDisconnect => self.get_d(map).map(Event::ClientDisconnect),
                 }
             }
         }
@@ -265,5 +270,11 @@ pub struct Resume {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Hello {
     pub heartbeat_interval: f32,
+}
+
+/// The `CLIENT_DISCONNECT` payload.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClientDisconnect {
+    pub user_id: Id<UserMarker>,
 }
 
