@@ -9,8 +9,15 @@ twilight-model = "0.13"
 twilight-http = "0.13"
 twilight-gateway = "0.13"
 twilight-cache-inmemory = "0.13"
-tokio = "1.21"
+tokio = { version = "1.21", features = ["rt", "rt-multi-thread", "macros"] }
+async-tungstenite = { version = "0.17", features = ["tokio-runtime", "tokio-rustls-native-certs"] }
+tungstenite = "0.17"
+serde = "1.0"
+serde_repr = "0.1"
+serde_json = "1.0"
+futures-util = "0.3"
 
 dotenv = "0.15"
 log = "0.4"
 env_logger = "0.9"
+anyhow = "1.0"
