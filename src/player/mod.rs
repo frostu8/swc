@@ -1,16 +1,16 @@
 //! Provides the audio [`Player`].
 
-mod ws;
+mod conn;
 
 use tokio::sync::{
     mpsc::{self, UnboundedSender, UnboundedReceiver},
 };
-use tokio::time::{sleep_until, Instant, Duration};
+use tokio::time::{sleep_until, timeout_at, Instant, Duration};
 use twilight_model::{
     id::{Id, marker::{GuildMarker, UserMarker}},
     gateway::payload::incoming::{VoiceStateUpdate, VoiceServerUpdate},
 };
-use ws::{payload::{Event, Hello, Heartbeat, Ready, Identify}, WebSocket};
+use conn::{Connection, Session};
 
 /// A music player for a specific guild.
 pub struct Player {
@@ -55,41 +55,6 @@ enum GatewayEvent {
     VoiceServerUpdate(VoiceServerUpdate),
 }
 
-struct WsState {
-    endpoint: String,
-    session_id: String,
-    token: String,
-}
-
-// manages heartbeat state
-struct Heartbeater {
-    interval: f32,
-    next_nonce: u64,
-    next: Instant,
-}
-
-impl Heartbeater {
-    /// Creates a new heartbeater.
-    pub fn new(interval: f32) -> Heartbeater {
-        Heartbeater {
-            interval,
-            next_nonce: 0,
-            next: Instant::now() + Duration::from_millis(interval as u64),
-        }
-    }
-
-    /// Returns the next heartbeat after the alloted time has passed.
-    pub async fn next(&mut self) -> Heartbeat {
-        sleep_until(self.next).await;
-
-        let heartbeat = Heartbeat(self.next_nonce);
-        self.next_nonce += 1;
-        self.next = Instant::now() + Duration::from_millis(self.interval as u64);
-
-        heartbeat
-    }
-}
-
 async fn run(
     guild_id: Id<GuildMarker>,
     user_id: Id<UserMarker>,
@@ -126,109 +91,38 @@ async fn run(
         }
     }
 
-    // establish ws state
-    let mut ws_state = {
-        let vstu = vstu.unwrap();
-        let vseu = vseu.unwrap();
-
-        WsState {
+    // establish session
+    let session = if let (Some(vseu), Some(vstu)) = (vseu, vstu) {
+        Session {
+            guild_id, user_id,
             endpoint: vseu.endpoint.unwrap(),
             token: vseu.token,
             session_id: vstu.0.session_id,
         }
+    } else {
+        error!("got not response for voice state update");
+        return;
     };
 
     debug!("got new session; establishing ws connection...");
 
-    let mut ws = WebSocket::new(&ws_state.endpoint).await.unwrap();
-
-    debug!("sending identify payload");
-
-    ws.send(&Event::Identify(Identify {
-        guild_id,
-        user_id,
-        session_id: ws_state.session_id,
-        token: ws_state.token,
-    }))
-    .await
-    .unwrap();
-
-    debug!("waiting for hello and ready");
-
-    // wait for hello and ready events
-    let mut hello: Option<Hello> = None;
-    let mut ready: Option<Ready> = None;
-
-    loop {
-        tokio::select! {
-            _ = sleep_until(timeout) => {
-                error!("player initialization timed out after 5000ms!");
-                return;
-            }
-            ev = ws.recv() => {
-                match ev {
-                    Ok(Some(ev)) => {
-                        match ev {
-                            Event::Hello(ev) => {
-                                hello = Some(ev);
-                            }
-                            Event::Ready(ev) => {
-                                ready = Some(ev);
-                            }
-                            ev => {
-                                warn!("unexpected event: {:?}", ev);
-                            }
-                        }
-
-                        if hello.is_some() && ready.is_some() {
-                            break;
-                        }
-                    }
-                    Ok(None) => {
-                        error!("ws closed unexpectedly");
-                        return;
-                    }
-                    Err(err) => {
-                        error!("ws error: {}", err);
-                        return;
-                    }
-                }
-            }
+    let timeout = Instant::now() + Duration::from_millis(5000);
+    let mut conn = match timeout_at(timeout, Connection::connect(session)).await {
+        Ok(Ok(conn)) => conn,
+        Ok(Err(err)) => {
+            error!("failed to connect to endpoint: {}", err);
+            return;
         }
-    }
+        Err(_) => {
+            error!("player initialization timed out after 5000ms!");
+            return;
+        }
+    };
 
-    // create heartbeater
-    let mut heartbeater = Heartbeater::new(hello.unwrap().heartbeat_interval);
-
-    // begin event loop
     loop {
         tokio::select! {
-            // next event
-            ev = ws.recv() => {
-                match ev {
-                    Ok(Some(ev)) => match ev {
-                        Event::HeartbeatAck(_) => {
-                            debug!("VOICE_HEARTBEAT_ACK");
-                        }
-                        _ => ()
-                    }
-                    Ok(None) => {
-                        break;
-                    }
-                    Err(ws::error::Error::Api(error)) if error.disconnected() => {
-                        debug!("forcibly disconnected from voice");
-                        break;
-                    }
-                    Err(err) => {
-                        error!("ws error: {}", err);
-                        break;
-                    }
-                }
-            }
-            // wait for heartbeats
-            heartbeat = heartbeater.next() => {
-                // send heartbeat
-                ws.send(&Event::Heartbeat(heartbeat)).await.unwrap();
+            ev = conn.next() => {
+                debug!("ev: {:?}", ev);
             }
         }
     }

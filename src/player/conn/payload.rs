@@ -12,9 +12,9 @@ use serde_repr::{Serialize_repr, Deserialize_repr};
 use std::fmt::{self, Formatter};
 use twilight_model::id::{Id, marker::{GuildMarker, UserMarker}};
 
-/// Websocket event.
+/// Raw gateway event.
 #[derive(Debug)]
-pub enum Event {
+pub enum GatewayEvent {
     Identify(Identify),
     SelectProtocol(SelectProtocol),
     Ready(Ready),
@@ -44,67 +44,67 @@ pub enum OpCode {
     ClientDisconnect = 13
 }
 
-impl Event {
+impl GatewayEvent {
     /// Gets the opcode of the event.
     pub fn op(&self) -> OpCode {
         match self {
-            Event::Identify(_) => OpCode::Identify,
-            Event::SelectProtocol(_) => OpCode::SelectProtocol,
-            Event::Ready(_) => OpCode::Ready,
-            Event::Heartbeat(_) => OpCode::Heartbeat,
-            Event::SessionDescription(_) => OpCode::SessionDescription,
-            Event::Speaking(_) => OpCode::Speaking,
-            Event::HeartbeatAck(_) => OpCode::HeartbeatAck,
-            Event::Resume(_) => OpCode::Resume,
-            Event::Hello(_) => OpCode::Hello,
-            Event::Resumed => OpCode::Resumed,
-            Event::ClientDisconnect(_) => OpCode::ClientDisconnect,
+            GatewayEvent::Identify(_) => OpCode::Identify,
+            GatewayEvent::SelectProtocol(_) => OpCode::SelectProtocol,
+            GatewayEvent::Ready(_) => OpCode::Ready,
+            GatewayEvent::Heartbeat(_) => OpCode::Heartbeat,
+            GatewayEvent::SessionDescription(_) => OpCode::SessionDescription,
+            GatewayEvent::Speaking(_) => OpCode::Speaking,
+            GatewayEvent::HeartbeatAck(_) => OpCode::HeartbeatAck,
+            GatewayEvent::Resume(_) => OpCode::Resume,
+            GatewayEvent::Hello(_) => OpCode::Hello,
+            GatewayEvent::Resumed => OpCode::Resumed,
+            GatewayEvent::ClientDisconnect(_) => OpCode::ClientDisconnect,
         }
     }
 }
 
-impl Serialize for Event {
+impl Serialize for GatewayEvent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut event = serializer.serialize_struct("Event", 2)?;
+        let mut event = serializer.serialize_struct("GatewayEvent", 2)?;
         event.serialize_field("op", &self.op())?;
 
         match self {
-            Event::Identify(ev) => event.serialize_field("d", ev)?,
-            Event::SelectProtocol(ev) => event.serialize_field("d", ev)?,
-            Event::Ready(ev) => event.serialize_field("d", ev)?,
-            Event::Heartbeat(ev) => event.serialize_field("d", ev)?,
-            Event::SessionDescription(ev) => event.serialize_field("d", ev)?,
-            Event::Speaking(ev) => event.serialize_field("d", ev)?,
-            Event::HeartbeatAck(ev) => event.serialize_field("d", ev)?,
-            Event::Resume(ev) => event.serialize_field("d", ev)?,
-            Event::Hello(ev) => event.serialize_field("d", ev)?,
-            Event::Resumed => event.serialize_field("d", &None::<()>)?,
-            Event::ClientDisconnect(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Identify(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::SelectProtocol(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Ready(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Heartbeat(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::SessionDescription(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Speaking(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::HeartbeatAck(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Resume(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Hello(ev) => event.serialize_field("d", ev)?,
+            GatewayEvent::Resumed => event.serialize_field("d", &None::<()>)?,
+            GatewayEvent::ClientDisconnect(ev) => event.serialize_field("d", ev)?,
         };
 
         event.end()
     }
 }
 
-/// A deserializer for [`Event`].
-pub struct EventDeserializer {
+/// A deserializer for [`GatewayEvent`].
+pub struct GatewayEventDeserializer {
     op: u8,
 }
 
-impl EventDeserializer {
-    /// Creates a new `EventDeserializer`.
-    pub const fn new(op: u8) -> EventDeserializer {
-        EventDeserializer {
+impl GatewayEventDeserializer {
+    /// Creates a new `GatewayEventDeserializer`.
+    pub const fn new(op: u8) -> GatewayEventDeserializer {
+        GatewayEventDeserializer {
             op,
         }
     }
 
     /// Scans the JSON payload for identification data.
-    pub fn from_json(input: &str) -> Option<EventDeserializer> {
-        Some(EventDeserializer {
+    pub fn from_json(input: &str) -> Option<GatewayEventDeserializer> {
+        Some(GatewayEventDeserializer {
             op: Self::find_opcode(input)?,
         })
     }
@@ -118,10 +118,10 @@ impl EventDeserializer {
     }
 }
 
-impl<'de> DeserializeSeed<'de> for EventDeserializer {
-    type Value = Event;
+impl<'de> DeserializeSeed<'de> for GatewayEventDeserializer {
+    type Value = GatewayEvent;
 
-    fn deserialize<D>(self, deserializer: D) -> Result<Event, D::Error>
+    fn deserialize<D>(self, deserializer: D) -> Result<GatewayEvent, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -132,9 +132,9 @@ impl<'de> DeserializeSeed<'de> for EventDeserializer {
             Op,
         }
 
-        struct EventVisitor(u8);
+        struct GatewayEventVisitor(u8);
 
-        impl EventVisitor {
+        impl GatewayEventVisitor {
             fn get_d<'de, T, V>(self, mut map: V) -> Result<T, V::Error>
             where
                 V: MapAccess<'de>,
@@ -160,14 +160,14 @@ impl<'de> DeserializeSeed<'de> for EventDeserializer {
             }
         }
 
-        impl<'de> Visitor<'de> for EventVisitor {
-            type Value = Event;
+        impl<'de> Visitor<'de> for GatewayEventVisitor {
+            type Value = GatewayEvent;
 
             fn expecting(&self, f: &mut Formatter) -> fmt::Result {
-                f.write_str("valid Event struct")
+                f.write_str("valid GatewayEvent struct")
             }
 
-            fn visit_map<V>(self, map: V) -> Result<Event, V::Error>
+            fn visit_map<V>(self, map: V) -> Result<GatewayEvent, V::Error>
             where
                 V: MapAccess<'de>,
             {
@@ -180,22 +180,22 @@ impl<'de> DeserializeSeed<'de> for EventDeserializer {
                 })?;
 
                 match op {
-                    OpCode::Identify => self.get_d(map).map(Event::Identify),
-                    OpCode::SelectProtocol => self.get_d(map).map(Event::SelectProtocol),
-                    OpCode::Ready => self.get_d(map).map(Event::Ready),
-                    OpCode::Heartbeat => self.get_d(map).map(Event::Heartbeat),
-                    OpCode::SessionDescription => self.get_d(map).map(Event::SessionDescription),
-                    OpCode::Speaking => self.get_d(map).map(Event::Speaking),
-                    OpCode::HeartbeatAck => self.get_d(map).map(Event::HeartbeatAck),
-                    OpCode::Resume => self.get_d(map).map(Event::Resume),
-                    OpCode::Hello => self.get_d(map).map(Event::Hello),
-                    OpCode::Resumed => Ok(Event::Resumed),
-                    OpCode::ClientDisconnect => self.get_d(map).map(Event::ClientDisconnect),
+                    OpCode::Identify => self.get_d(map).map(GatewayEvent::Identify),
+                    OpCode::SelectProtocol => self.get_d(map).map(GatewayEvent::SelectProtocol),
+                    OpCode::Ready => self.get_d(map).map(GatewayEvent::Ready),
+                    OpCode::Heartbeat => self.get_d(map).map(GatewayEvent::Heartbeat),
+                    OpCode::SessionDescription => self.get_d(map).map(GatewayEvent::SessionDescription),
+                    OpCode::Speaking => self.get_d(map).map(GatewayEvent::Speaking),
+                    OpCode::HeartbeatAck => self.get_d(map).map(GatewayEvent::HeartbeatAck),
+                    OpCode::Resume => self.get_d(map).map(GatewayEvent::Resume),
+                    OpCode::Hello => self.get_d(map).map(GatewayEvent::Hello),
+                    OpCode::Resumed => Ok(GatewayEvent::Resumed),
+                    OpCode::ClientDisconnect => self.get_d(map).map(GatewayEvent::ClientDisconnect),
                 }
             }
         }
         
-        deserializer.deserialize_struct("Event", &["d"], EventVisitor(self.op))
+        deserializer.deserialize_struct("GatewayEvent", &["d"], GatewayEventVisitor(self.op))
     }
 }
 
