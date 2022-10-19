@@ -3,7 +3,7 @@ use std::{env, sync::Arc};
 use twilight_gateway::{Cluster, Intents};
 use futures_util::StreamExt;
 
-use swc::player::Player;
+use swc::player::{Player, Manager};
 use twilight_model::gateway::{payload::outgoing::update_voice_state::UpdateVoiceState, event::Event};
 use twilight_model::id::{Id, marker::{ChannelMarker, GuildMarker, UserMarker}};
 
@@ -25,29 +25,25 @@ async fn main() -> anyhow::Result<()> {
         cluster_spawn.up().await;
     });
 
-    let mut player: Option<Player> = None;
+    let mut manager: Option<Manager> = None;
 
     while let Some((_, ev)) = events.next().await {
         match ev {
-            Event::Ready(_) => {
-                let guild_id = Id::<GuildMarker>::new(952331087714070548);
-                let channel_id = Id::<ChannelMarker>::new(972610486229168244);
-                let user_id = Id::<UserMarker>::new(895420881696849920);
+            Event::Ready(ready) => {
+                let user_id = ready.user.id;
 
-                // create player
-                player = Some(Player::new(user_id, guild_id).await);
-
-                // establish connection
-                cluster.command(0, &UpdateVoiceState::new(guild_id, channel_id, false, false)).await.unwrap();
+                // initialize manager
+                manager = Some(Manager::new(Arc::clone(&cluster), user_id));
+                manager.as_ref().unwrap().join(Id::new(683483117473759249), Id::new(683483410962055270)).await;
             }
             Event::VoiceStateUpdate(ev) => {
-                if let Some(player) = &player {
-                    player.voice_state_update(ev);
+                if let Some(manager) = &manager {
+                    manager.voice_state_update(ev).await;
                 }
             }
             Event::VoiceServerUpdate(ev) => {
-                if let Some(player) = &player {
-                    player.voice_server_update(ev);
+                if let Some(manager) = &manager {
+                    manager.voice_server_update(ev).await;
                 }
             }
             _ => ()

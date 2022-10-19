@@ -21,7 +21,7 @@ impl Error {
     /// Checks if the error was a result of being disconnected gracefully.
     pub fn disconnected(&self) -> bool {
         match self {
-            Error::Api(err) => err.disconnected(),
+            Error::Api(err) => matches!(err.code, Code::Disconnected),
             _ => false,
         }
     }
@@ -30,6 +30,7 @@ impl Error {
     pub fn can_resume(&self) -> bool {
         match self {
             Error::Api(err) => matches!(err.code, Code::VoiceServerCrashed),
+            Error::Io(_) => true,
             _ => false,
         }
     }
@@ -86,13 +87,6 @@ impl std::error::Error for Error {
 pub struct ApiError {
     pub code: Code,
     pub message: String,
-}
-
-impl ApiError {
-    /// Checks if the error was a normal disconnection error.
-    pub fn disconnected(&self) -> bool {
-        matches!(self.code, Code::Disconnected)
-    }
 }
 
 impl Display for ApiError {

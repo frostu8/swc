@@ -1,6 +1,9 @@
-//! Provides the audio [`Player`].
+//! Provides the audio [`Player`] and the player manager [`Manager`].
 
 mod conn;
+mod manager;
+
+pub use manager::Manager;
 
 use tokio::sync::{
     mpsc::{self, UnboundedSender, UnboundedReceiver},
@@ -13,13 +16,14 @@ use twilight_model::{
 use conn::{Connection, Session};
 
 /// A music player for a specific guild.
+#[derive(Clone)]
 pub struct Player {
     guild_id: Id<GuildMarker>,
-    user_id: Id<UserMarker>,
     gateway_tx: UnboundedSender<GatewayEvent>,
 }
 
 impl Player {
+    /// Creates a new player.
     pub async fn new(
         user_id: impl Into<Id<UserMarker>>,
         guild_id: impl Into<Id<GuildMarker>>,
@@ -36,18 +40,38 @@ impl Player {
         Player {
             gateway_tx,
             guild_id,
-            user_id,
         }
     }
 
-    pub fn voice_state_update(&self, ev: Box<VoiceStateUpdate>) {
-        self.gateway_tx.send(GatewayEvent::VoiceStateUpdate(ev)).unwrap();
+    /// The guild id of the player.
+    pub fn guild_id(&self) -> Id<GuildMarker> {
+        self.guild_id
     }
 
-    pub fn voice_server_update(&self, ev: VoiceServerUpdate) {
-        self.gateway_tx.send(GatewayEvent::VoiceServerUpdate(ev)).unwrap();
+    /// Check if the player is closed.
+    pub fn is_closed(&self) -> bool {
+        self.gateway_tx.is_closed()
+    }
+
+    /// Updates the player's state with a [`VoiceStateUpdate`] event.
+    pub fn voice_state_update(&self, ev: Box<VoiceStateUpdate>) -> Result<(), Error> {
+        self.gateway_tx.send(GatewayEvent::VoiceStateUpdate(ev)).map_err(|_| Error)
+    }
+
+    /// Updates the player's state with a [`VoiceServerUpdate`] event.
+    pub fn voice_server_update(&self, ev: VoiceServerUpdate) -> Result<(), Error> {
+        self.gateway_tx.send(GatewayEvent::VoiceServerUpdate(ev)).map_err(|_| Error)
     }
 }
+
+/// An error for operations with [`Player`].
+///
+/// A [`Player`] may stop at any time in response to an unrecoverable error.
+/// Things like being disconnected administratively by someone who has that
+/// power is an unrecoverable error, and so is Discord servers going entirely
+/// down.
+#[derive(Clone, Copy, Debug)]
+pub struct Error;
 
 #[derive(Debug)]
 enum GatewayEvent {
@@ -100,7 +124,7 @@ async fn run(
             session_id: vstu.0.session_id,
         }
     } else {
-        error!("got not response for voice state update");
+        error!("got no response for voice state update");
         return;
     };
 
@@ -110,7 +134,7 @@ async fn run(
     let mut conn = match timeout_at(timeout, Connection::connect(session)).await {
         Ok(Ok(conn)) => conn,
         Ok(Err(err)) => {
-            error!("failed to connect to endpoint: {}", err);
+            error!("connect: {}", err);
             return;
         }
         Err(_) => {
@@ -133,7 +157,7 @@ async fn run(
                     }
                     Some(Err(err)) => {
                         // print error and continue
-                        error!("voice conn: {}", err);
+                        error!("voice: {}", err);
                         break;
                     }
                     None => break
@@ -153,7 +177,7 @@ async fn run(
                         conn = match timeout_at(timeout, Connection::connect(session)).await {
                             Ok(Ok(conn)) => conn,
                             Ok(Err(err)) => {
-                                error!("failed to connect to endpoint: {}", err);
+                                error!("connect: {}", err);
                                 return;
                             }
                             Err(_) => {
@@ -162,14 +186,12 @@ async fn run(
                             }
                         };
                     }
-                    GatewayEvent::VoiceStateUpdate(vstu) => {
+                    GatewayEvent::VoiceStateUpdate(_vstu) => {
                         // TODO: handle state update
                     }
                 }
             }
         }
     }
-
-    debug!("voice connection ended");
 }
 
