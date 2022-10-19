@@ -34,11 +34,11 @@ async fn main() -> anyhow::Result<()> {
                 let channel_id = Id::<ChannelMarker>::new(972610486229168244);
                 let user_id = Id::<UserMarker>::new(895420881696849920);
 
-                // establish connection
-                cluster.command(0, &UpdateVoiceState::new(guild_id, channel_id, false, false)).await.unwrap();
-
                 // create player
                 player = Some(Player::new(user_id, guild_id).await);
+
+                // establish connection
+                cluster.command(0, &UpdateVoiceState::new(guild_id, channel_id, false, false)).await.unwrap();
             }
             Event::VoiceStateUpdate(ev) => {
                 if let Some(player) = &player {
