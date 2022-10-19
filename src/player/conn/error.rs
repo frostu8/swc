@@ -1,16 +1,38 @@
-//! Websocket error.
+//! Connection error.
 
 use tungstenite::protocol::frame::{CloseFrame, coding::CloseCode};
 use std::fmt::{self, Debug, Display, Formatter};
 
-/// Websocket error.
+use super::rtp::IpDiscoveryError;
+
+/// Connection error.
 #[derive(Debug)]
 pub enum Error {
     Api(ApiError),
     Closed(Option<CloseFrame<'static>>),
     Ws(tungstenite::error::Error),
+    Io(std::io::Error),
     Json(serde_json::Error),
+    IpDiscovery(IpDiscoveryError),
     MissingOpcode,
+}
+
+impl Error {
+    /// Checks if the error was a result of being disconnected gracefully.
+    pub fn disconnected(&self) -> bool {
+        match self {
+            Error::Api(err) => err.disconnected(),
+            _ => false,
+        }
+    }
+
+    /// Checks if we can safely resume after an error.
+    pub fn can_resume(&self) -> bool {
+        match self {
+            Error::Api(err) => matches!(err.code, Code::VoiceServerCrashed),
+            _ => false,
+        }
+    }
 }
 
 impl Display for Error {
@@ -18,16 +40,33 @@ impl Display for Error {
         match self {
             Error::Api(err) => Display::fmt(err, f),
             Error::Ws(err) => Display::fmt(err, f),
+            Error::Io(err) => Display::fmt(err, f),
             Error::Closed(err) => Debug::fmt(err, f),
             Error::Json(err) => Display::fmt(err, f),
+            Error::IpDiscovery(err) => Display::fmt(err, f),
             Error::MissingOpcode => f.write_str("missing opcode"),
         }
     }
 }
 
 impl From<tungstenite::error::Error> for Error {
-    fn from(e: tungstenite::error::Error) -> Error {
-        Error::Ws(e)
+    fn from(err: tungstenite::error::Error) -> Error {
+        match err {
+            tungstenite::error::Error::Io(err) => Error::Io(err),
+            err => Error::Ws(err),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Error {
+        Error::Io(err)
+    }
+}
+
+impl From<IpDiscoveryError> for Error {
+    fn from(err: IpDiscoveryError) -> Error {
+        Error::IpDiscovery(err)
     }
 }
 

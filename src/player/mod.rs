@@ -122,9 +122,54 @@ async fn run(
     loop {
         tokio::select! {
             ev = conn.next() => {
-                debug!("ev: {:?}", ev);
+                match ev {
+                    Some(Ok(ev)) => {
+                        // discard event
+                    }
+                    Some(Err(err)) if err.disconnected() => {
+                        // normal disconnect event
+                        debug!("disconnected");
+                        break;
+                    }
+                    Some(Err(err)) => {
+                        // print error and continue
+                        error!("voice conn: {}", err);
+                        break;
+                    }
+                    None => break
+                }
+            }
+            Some(ev) = gateway.recv() => {
+                match ev {
+                    GatewayEvent::VoiceServerUpdate(vseu) => {
+                        // server update; reconnect
+                        let session = Session {
+                            guild_id, user_id,
+                            endpoint: vseu.endpoint.unwrap(),
+                            token: vseu.token,
+                            session_id: conn.session().session_id.clone(),
+                        };
+                        let timeout = Instant::now() + Duration::from_millis(5000);
+                        conn = match timeout_at(timeout, Connection::connect(session)).await {
+                            Ok(Ok(conn)) => conn,
+                            Ok(Err(err)) => {
+                                error!("failed to connect to endpoint: {}", err);
+                                return;
+                            }
+                            Err(_) => {
+                                error!("player reconnection timed out after 5000ms!");
+                                return;
+                            }
+                        };
+                    }
+                    GatewayEvent::VoiceStateUpdate(vstu) => {
+                        // TODO: handle state update
+                    }
+                }
             }
         }
     }
+
+    debug!("voice connection ended");
 }
 

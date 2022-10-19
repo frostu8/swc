@@ -1,16 +1,22 @@
-//! Voice websocket things.
+//! Voice connection things.
 
 pub mod error;
 pub mod payload;
+pub mod rtp;
 
-use error::{ApiError, Error};
-use payload::{GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify};
+pub use error::Error;
+
+use error::ApiError;
+use payload::{GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify, SelectProtocol, SelectProtocolData, SessionDescription, Resume};
+use rtp::EncryptionMode;
+
+use tokio::time::{Instant, Duration, sleep_until};
+use tokio::net::UdpSocket;
 
 use async_tungstenite::{WebSocketStream, tokio::{connect_async, ConnectStream}};
 use tungstenite::protocol::Message;
 use twilight_model::id::{Id, marker::{GuildMarker, UserMarker}};
 use futures_util::{Stream, StreamExt, Sink, SinkExt};
-use tokio::time::{Instant, Duration, sleep_until};
 use serde::de::DeserializeSeed as _;
 
 /// Unmanaged voice connection to a websocket.
@@ -28,7 +34,11 @@ impl Connection {
     pub async fn connect(session: Session) -> Result<Connection, Error> {
         let (wss, _response) = connect_async(format!("wss://{}/?v=4", session.endpoint)).await?;
 
-        let mut conn = Connection { session, wss, heartbeater: Default::default() };
+        let mut conn = Connection {
+            session,
+            wss,
+            heartbeater: Default::default(),
+        };
         conn.handshake().await?;
 
         Ok(conn)
@@ -50,8 +60,20 @@ impl Connection {
                                 warn!("invalid ACK, nonce: {}", ack.0);
                             }
                         }
+                        Some(Ok(GatewayEvent::Speaking(ev))) => {
+                            return Some(Ok(Event::Speaking(ev)));
+                        }
+                        Some(Ok(GatewayEvent::ClientDisconnect(ev))) => {
+                            return Some(Ok(Event::ClientDisconnect(ev)));
+                        }
                         Some(Ok(ev)) => {
-                            todo!()
+                            warn!("skipping ev: {:?}", ev);
+                        }
+                        Some(Err(err)) if err.can_resume() => {
+                            match self.resume().await {
+                                Ok(()) => (),
+                                Err(err) => return Some(Err(err)),
+                            }
                         }
                         Some(Err(err)) => {
                             return Some(Err(err));
@@ -67,13 +89,18 @@ impl Connection {
             }
         }
     }
+    
+    /// Gets session information.
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
 
     /// Completes a handshake with the voice server. See [discord's docs][1] for
     /// more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
     async fn handshake(&mut self) -> Result<(), Error> {
-        debug!("begin websocket handshake @ {}", self.session.endpoint);
+        debug!("begin websocket handshake");
 
         send(&mut self.wss, &GatewayEvent::Identify(Identify {
             guild_id: self.session.guild_id,
@@ -82,8 +109,6 @@ impl Connection {
             token: self.session.token.clone(),
         }))
         .await?;
-
-        debug!("waiting for response");
 
         // wait for hello and ready events
         let mut hello: Option<Hello> = None;
@@ -115,8 +140,99 @@ impl Connection {
             }
         }
 
+        let hello = hello.unwrap();
+        let ready = ready.unwrap();
+
         // create heartbeater
-        self.heartbeater = Heartbeater::new(hello.unwrap().heartbeat_interval);
+        self.heartbeater = Heartbeater::new(hello.heartbeat_interval);
+
+        // establish udp connection and discover ip
+        let udp = UdpSocket::bind(("0.0.0.0", ready.port)).await?;
+        udp.connect((ready.ip, ready.port)).await?;
+
+        let ip = rtp::ip_discovery(&udp, ready.ssrc).await?;
+
+        // choose encryption mode
+        // order: lite > suffix > normal
+        let mode = ready.modes.iter().find(|&m| *m == EncryptionMode::Lite)
+            .or_else(|| ready.modes.iter().find(|&m| *m == EncryptionMode::Suffix))
+            .or_else(|| ready.modes.iter().find(|&m| *m == EncryptionMode::Normal))
+            // TODO: graceful error handling in case of no encryption modes
+            .cloned()
+            .unwrap();
+
+        debug!("selected encryption mode {}", mode);
+
+        // select protocol
+        send(&mut self.wss, &GatewayEvent::SelectProtocol(SelectProtocol {
+            protocol: String::from("udp"),
+            data: SelectProtocolData {
+                address: format!("{}", ip.ip()),
+                port: ip.port(),
+                mode,
+            },
+        }))
+        .await?;
+
+        // wait for response
+        let mut desc: Option<SessionDescription> = None;
+
+        while let Some(ev) = recv(&mut self.wss).await {
+            match ev {
+                Ok(GatewayEvent::SessionDescription(ev)) => {
+                    desc = Some(ev);
+                    break;
+                }
+                Ok(ev) => {
+                    warn!("unexpected event: {:?}", ev);
+                }
+                Err(err) => {
+                    error!("ws error: {}", err);
+                    return Err(err);
+                }
+            }
+        }
+
+        let desc = desc.unwrap();
+
+        info!("voice connected to {}", self.session.endpoint);
+
+        Ok(())
+    }
+
+    /// Completes a session resume handshake with the voice server. See
+    /// [discord's docs][1] for more information.
+    ///
+    /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
+    async fn resume(&mut self) -> Result<(), Error> {
+        debug!("begin websocket resume handshake");
+
+        send(&mut self.wss, &GatewayEvent::Resume(Resume {
+            guild_id: self.session.guild_id,
+            session_id: self.session.session_id.clone(),
+            token: self.session.token.clone(),
+        }))
+        .await?;
+
+        // wait for response
+        while let Some(ev) = recv(&mut self.wss).await {
+            match ev {
+                Ok(GatewayEvent::Resumed) => {
+                    break;
+                }
+                Ok(ev) => {
+                    warn!("unexpected event: {:?}", ev);
+                }
+                Err(Error::Closed(_)) | Err(Error::Api(_)) => {
+                    warn!("resume failed, attempting to reconnect");
+                    return self.handshake().await;
+                }
+                Err(err) => {
+                    error!("ws error: {}", err);
+                    return Err(err);
+                }
+            }
+        }
 
         Ok(())
     }

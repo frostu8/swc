@@ -30,8 +30,8 @@ async fn main() -> anyhow::Result<()> {
     while let Some((_, ev)) = events.next().await {
         match ev {
             Event::Ready(_) => {
-                let guild_id = Id::<GuildMarker>::new(683483117473759249);
-                let channel_id = Id::<ChannelMarker>::new(683483410962055270);
+                let guild_id = Id::<GuildMarker>::new(952331087714070548);
+                let channel_id = Id::<ChannelMarker>::new(972610486229168244);
                 let user_id = Id::<UserMarker>::new(895420881696849920);
 
                 // establish connection

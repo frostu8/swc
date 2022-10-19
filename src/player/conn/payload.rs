@@ -11,6 +11,7 @@ use serde::{
 use serde_repr::{Serialize_repr, Deserialize_repr};
 use std::fmt::{self, Formatter};
 use twilight_model::id::{Id, marker::{GuildMarker, UserMarker}};
+use super::rtp::EncryptionMode;
 
 /// Raw gateway event.
 #[derive(Debug)]
@@ -221,7 +222,7 @@ pub struct SelectProtocol {
 pub struct SelectProtocolData {
     pub address: String,
     pub port: u16,
-    pub mode: String,
+    pub mode: EncryptionMode,
 }
 
 /// The `READY` payload.
@@ -230,7 +231,7 @@ pub struct Ready {
     pub ssrc: u32,
     pub ip: String,
     pub port: u16,
-    pub modes: Vec<String>,
+    pub modes: Vec<EncryptionMode>,
 }
 
 /// The `SESSION_DESCRIPTION` payload.
