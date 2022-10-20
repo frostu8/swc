@@ -10,12 +10,10 @@ use super::rtp::IpDiscoveryError;
 pub enum Error {
     Api(ApiError),
     Closed(Option<CloseFrame<'static>>),
+    Protocol(ProtocolError),
     Ws(tungstenite::error::Error),
     Io(std::io::Error),
-    Json(serde_json::Error),
     IpDiscovery(IpDiscoveryError),
-    MissingOpcode,
-    UnsupportedEncryptionMode(super::payload::EncryptionMode),
 }
 
 impl Error {
@@ -44,10 +42,8 @@ impl Display for Error {
             Error::Ws(err) => Display::fmt(err, f),
             Error::Io(err) => Display::fmt(err, f),
             Error::Closed(err) => Debug::fmt(err, f),
-            Error::Json(err) => Display::fmt(err, f),
             Error::IpDiscovery(err) => Display::fmt(err, f),
-            Error::MissingOpcode => f.write_str("missing opcode"),
-            Error::UnsupportedEncryptionMode(mode) => write!(f, "unsupported encryption mode: \"{}\"", mode),
+            Error::Protocol(err) => Display::fmt(err, f),
         }
     }
 }
@@ -78,7 +74,41 @@ impl std::error::Error for Error {
         match self {
             Error::Api(err) => Some(err),
             Error::Ws(err) => Some(err),
-            Error::Json(err) => Some(err),
+            Error::Protocol(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+/// Websocket protocol error.
+#[derive(Debug)]
+pub enum ProtocolError {
+    /// Payload failed to decode or encode.
+    Json(serde_json::Error),
+    /// The server returned an unsupported encryption mode.
+    UnsupportedEncryptionMode(super::payload::EncryptionMode),
+    /// The server returned a payload without a valid opcode.
+    MissingOpcode,
+}
+
+impl Display for ProtocolError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            ProtocolError::Json(err) => Display::fmt(err, f),
+            ProtocolError::UnsupportedEncryptionMode(mode) => {
+                write!(f, "unsupported encryption mode \"{}\"", mode)
+            },
+            ProtocolError::MissingOpcode => {
+                write!(f, "payload missing opcode")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ProtocolError::Json(err) => Some(err),
             _ => None,
         }
     }
@@ -93,7 +123,7 @@ pub struct ApiError {
 
 impl Display for ApiError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "#{:?}: {}", self.code, self.message)
+        write!(f, "#{}: {}", self.code as u16, self.message)
     }
 }
 

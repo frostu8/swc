@@ -7,7 +7,7 @@ pub mod rtp;
 pub use error::Error;
 pub use rtp::{Socket as RtpSocket, Packet as RtpPacket};
 
-use error::ApiError;
+use error::{ApiError, ProtocolError};
 use payload::{
     GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify,
     SelectProtocol, SelectProtocolData, SessionDescription, Resume,
@@ -177,7 +177,7 @@ impl Connection {
             EncryptionMode::Normal => rtp::EncryptionMode::Normal,
             EncryptionMode::Suffix => rtp::EncryptionMode::Suffix,
             EncryptionMode::Lite => rtp::EncryptionMode::Lite,
-            mode => return Err(Error::UnsupportedEncryptionMode(mode)),
+            mode => return Err(Error::Protocol(ProtocolError::UnsupportedEncryptionMode(mode))),
         };
 
         debug!("selected encryption mode {}", mode);
@@ -278,11 +278,11 @@ async fn recv(
                             
                             match event.deserialize(&mut json) {
                                 Ok(event) => return Some(Ok(event)),
-                                Err(err) => return Some(Err(Error::Json(err))),
+                                Err(err) => return Some(Err(Error::Protocol(ProtocolError::Json(err)))),
                             }
                         }
                         None => {
-                            return Some(Err(Error::MissingOpcode));
+                            return Some(Err(Error::Protocol(ProtocolError::MissingOpcode)));
                         }
                     }
                 }
@@ -314,7 +314,7 @@ async fn send(
     ev: &GatewayEvent,
 ) -> Result<(), Error> {
     // serialize event
-    let msg = serde_json::to_string(ev).map_err(Error::Json)?;
+    let msg = serde_json::to_string(ev).map_err(|e| Error::Protocol(ProtocolError::Json(e)))?;
 
     // send message
     wss.send(Message::Text(msg)).await?;
