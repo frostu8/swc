@@ -6,16 +6,17 @@ pub mod source;
 
 pub use manager::Manager;
 
-use tokio::sync::{
-    mpsc::{self, UnboundedSender, UnboundedReceiver},
-};
-use tokio::time::{sleep_until, timeout_at, Instant, Duration};
-use twilight_model::{
-    id::{Id, marker::{GuildMarker, UserMarker}},
-    gateway::payload::incoming::{VoiceStateUpdate, VoiceServerUpdate},
-};
-use conn::{Connection, Session, Event, RtpPacket, payload::Speaking};
+use conn::{payload::Speaking, Connection, Event, RtpPacket, Session};
 use source::Source;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::time::{sleep_until, timeout_at, Duration, Instant};
+use twilight_model::{
+    gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
+    id::{
+        marker::{GuildMarker, UserMarker},
+        Id,
+    },
+};
 
 /// A music player for a specific guild.
 #[derive(Clone)]
@@ -57,12 +58,16 @@ impl Player {
 
     /// Updates the player's state with a [`VoiceStateUpdate`] event.
     pub fn voice_state_update(&self, ev: Box<VoiceStateUpdate>) -> Result<(), Error> {
-        self.gateway_tx.send(GatewayEvent::VoiceStateUpdate(ev)).map_err(|_| Error)
+        self.gateway_tx
+            .send(GatewayEvent::VoiceStateUpdate(ev))
+            .map_err(|_| Error)
     }
 
     /// Updates the player's state with a [`VoiceServerUpdate`] event.
     pub fn voice_server_update(&self, ev: VoiceServerUpdate) -> Result<(), Error> {
-        self.gateway_tx.send(GatewayEvent::VoiceServerUpdate(ev)).map_err(|_| Error)
+        self.gateway_tx
+            .send(GatewayEvent::VoiceServerUpdate(ev))
+            .map_err(|_| Error)
     }
 }
 
@@ -120,7 +125,8 @@ async fn run(
     // establish session
     let session = if let (Some(vseu), Some(vstu)) = (vseu, vstu) {
         Session {
-            guild_id, user_id,
+            guild_id,
+            user_id,
             endpoint: vseu.endpoint.unwrap(),
             token: vseu.token,
             session_id: vstu.0.session_id,
@@ -146,7 +152,9 @@ async fn run(
     };
 
     // TODO: testing
-    let mut source = Source::new("https://www.youtube.com/watch?v=7O-TZdXh7Y4").await.unwrap();
+    let mut source = Source::new("https://www.youtube.com/watch?v=7O-TZdXh7Y4")
+        .await
+        .unwrap();
     let mut packet = RtpPacket::default();
 
     let mut next_burst = Instant::now();
@@ -265,4 +273,3 @@ where
     sleep_until(deadline).await;
     fut.await
 }
-

@@ -2,15 +2,18 @@
 
 use super::Player;
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use twilight_model::id::{Id, marker::{ChannelMarker, GuildMarker, UserMarker}};
-use twilight_model::gateway::payload::incoming::{VoiceStateUpdate, VoiceServerUpdate};
-use twilight_model::gateway::payload::outgoing::UpdateVoiceState;
 use twilight_gateway::Cluster;
+use twilight_model::gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate};
+use twilight_model::gateway::payload::outgoing::UpdateVoiceState;
+use twilight_model::id::{
+    marker::{ChannelMarker, GuildMarker, UserMarker},
+    Id,
+};
 
 /// [`Player`] manager across many guilds.
 ///
@@ -33,17 +36,15 @@ impl Manager {
             mref: Arc::new(ManagerRef {
                 players: RwLock::new(HashMap::new()),
             }),
-            me, gateway,
+            me,
+            gateway,
         }
     }
 
     /// Gets the player currently playing in a voice guild.
     ///
     /// Returns `None` if it does not exist or the player is closed.
-    pub async fn get(
-        &self,
-        guild_id: impl Into<Id<GuildMarker>>,
-    ) -> Option<Player> {
+    pub async fn get(&self, guild_id: impl Into<Id<GuildMarker>>) -> Option<Player> {
         self.get_player(guild_id.into()).await
     }
 
@@ -67,7 +68,13 @@ impl Manager {
         };
 
         // update voice state
-        self.gateway.command(0, &UpdateVoiceState::new(guild_id, channel_id, false, false)).await.unwrap();
+        self.gateway
+            .command(
+                0,
+                &UpdateVoiceState::new(guild_id, channel_id, false, false),
+            )
+            .await
+            .unwrap();
 
         // return new player
         player
@@ -97,13 +104,11 @@ impl Manager {
     /// Creates a new player and adds it to the collection.
     ///
     /// Returns `None` if it does not exist or the player is closed.
-    async fn new_player(
-        &self,
-        guild_id: Id<GuildMarker>,
-    ) -> Player {
+    async fn new_player(&self, guild_id: Id<GuildMarker>) -> Player {
         let player = Player::new(self.me, guild_id).await;
 
-        self.mref.players
+        self.mref
+            .players
             .write()
             .await
             .insert(guild_id, player.clone());
@@ -115,11 +120,12 @@ impl Manager {
     ///
     /// Returns `None` if it does not exist or the player is closed.
     async fn get_player(&self, id: Id<GuildMarker>) -> Option<Player> {
-        self.mref.players
-            .read()
-            .await
-            .get(&id)
-            .and_then(|p| if p.is_closed() { None } else { Some(p.clone()) })
+        self.mref.players.read().await.get(&id).and_then(|p| {
+            if p.is_closed() {
+                None
+            } else {
+                Some(p.clone())
+            }
+        })
     }
 }
-

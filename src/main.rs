@@ -1,7 +1,7 @@
+use futures_util::StreamExt;
 use log::LevelFilter;
 use std::{env, sync::Arc};
 use twilight_gateway::{Cluster, Intents};
-use futures_util::StreamExt;
 
 use swc::player::Manager;
 use twilight_model::gateway::event::Event;
@@ -16,7 +16,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // initialize discord cluster
-    let (cluster, mut events) = Cluster::new(env::var("DISCORD_TOKEN")?, Intents::GUILD_VOICE_STATES).await?;
+    let (cluster, mut events) =
+        Cluster::new(env::var("DISCORD_TOKEN")?, Intents::GUILD_VOICE_STATES).await?;
     let cluster = Arc::new(cluster);
 
     // spawn cluster thread
@@ -34,7 +35,11 @@ async fn main() -> anyhow::Result<()> {
 
                 // initialize manager
                 manager = Some(Manager::new(Arc::clone(&cluster), user_id));
-                manager.as_ref().unwrap().join(Id::new(952331087714070548), Id::new(972610486229168244)).await;
+                manager
+                    .as_ref()
+                    .unwrap()
+                    .join(Id::new(952331087714070548), Id::new(972610486229168244))
+                    .await;
             }
             Event::VoiceStateUpdate(ev) => {
                 if let Some(manager) = &manager {
@@ -46,10 +51,9 @@ async fn main() -> anyhow::Result<()> {
                     manager.voice_server_update(ev).await;
                 }
             }
-            _ => ()
+            _ => (),
         }
     }
 
     Ok(())
 }
-

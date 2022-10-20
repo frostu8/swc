@@ -1,14 +1,14 @@
 //! Source management.
 
-use tokio::process::{Command, Child};
 use tokio::io::AsyncReadExt;
+use tokio::process::{Child, Command};
 
 use std::fmt::{self, Display, Formatter};
 use std::process::Stdio;
 
 use crate::constants::{SAMPLE_RATE, STEREO_FRAME_SIZE};
 
-use opus::{Encoder, Channels, Application};
+use opus::{Application, Channels, Encoder};
 
 /// A ytdl audio source.
 ///
@@ -27,8 +27,13 @@ impl Source {
     /// Reads the next Opus packet into the buffer.
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         loop {
-            let len = self.ffmpeg.stdout.as_mut().unwrap()
-                .read(bytemuck::cast_slice_mut(&mut self.buf[self.buf_len..])).await?;
+            let len = self
+                .ffmpeg
+                .stdout
+                .as_mut()
+                .unwrap()
+                .read(bytemuck::cast_slice_mut(&mut self.buf[self.buf_len..]))
+                .await?;
 
             self.buf_len += len / std::mem::size_of::<f32>();
             if self.buf_len >= self.buf.len() {
@@ -59,11 +64,14 @@ impl Source {
     pub async fn new(url: &str) -> Result<Source, Error> {
         let mut ytdl = Command::new("youtube-dl")
             .args(&[
-                "-f", "webm[abr>0]/bestaudio/best",
-                "-R", "infinite",
+                "-f",
+                "webm[abr>0]/bestaudio/best",
+                "-R",
+                "infinite",
                 "-q",
                 url,
-                "-o", "-",
+                "-o",
+                "-",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -73,12 +81,18 @@ impl Source {
 
         let ffmpeg = Command::new("ffmpeg")
             .args(&[
-                "-i", "pipe:0",
-                "-ac", "2",
-                "-ar", "48000",
-                "-f", "s16le",
-                "-acodec", "pcm_f32le",
-                "-loglevel", "quiet",
+                "-i",
+                "pipe:0",
+                "-ac",
+                "2",
+                "-ar",
+                "48000",
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_f32le",
+                "-loglevel",
+                "quiet",
                 "pipe:1",
             ])
             .stdin(ytdl_stdio)
@@ -87,7 +101,8 @@ impl Source {
             .spawn()?;
 
         Ok(Source {
-            ytdl, ffmpeg,
+            ytdl,
+            ffmpeg,
             coder: Encoder::new(SAMPLE_RATE as u32, Channels::Stereo, Application::Audio)?,
             buf: [0f32; STEREO_FRAME_SIZE],
             buf_len: 0,
@@ -131,4 +146,3 @@ impl std::error::Error for Error {
         }
     }
 }
-

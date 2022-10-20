@@ -2,12 +2,16 @@
 
 use super::Packet;
 
-use rand::{RngCore, Rng, SeedableRng, rngs::{StdRng, OsRng}};
+use rand::{
+    rngs::{OsRng, StdRng},
+    Rng, RngCore, SeedableRng,
+};
 
 use std::fmt::{self, Debug, Formatter};
 
 use xsalsa20poly1305::{
-    XSalsa20Poly1305, NONCE_SIZE, aead::{self, KeyInit, AeadInPlace},
+    aead::{self, AeadInPlace, KeyInit},
+    XSalsa20Poly1305, NONCE_SIZE,
 };
 
 /// Crypto mode for [`Encryptor`].

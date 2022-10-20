@@ -5,24 +5,29 @@ pub mod payload;
 pub mod rtp;
 
 pub use error::Error;
-pub use rtp::{Socket as RtpSocket, Packet as RtpPacket};
+pub use rtp::{Packet as RtpPacket, Socket as RtpSocket};
 
 use error::{ApiError, ProtocolError};
 use payload::{
-    GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify,
-    SelectProtocol, SelectProtocolData, SessionDescription, Resume,
-    EncryptionMode,
+    ClientDisconnect, EncryptionMode, GatewayEvent, Heartbeat, Hello, Identify, Ready, Resume,
+    SelectProtocol, SelectProtocolData, SessionDescription, Speaking,
 };
 use rtp::Encryptor;
 
-use tokio::time::{Instant, Duration, sleep_until};
 use tokio::net::UdpSocket;
+use tokio::time::{sleep_until, Duration, Instant};
 
-use async_tungstenite::{WebSocketStream, tokio::{connect_async, ConnectStream}};
-use tungstenite::protocol::Message;
-use twilight_model::id::{Id, marker::{GuildMarker, UserMarker}};
-use futures_util::{Stream, StreamExt, Sink, SinkExt};
+use async_tungstenite::{
+    tokio::{connect_async, ConnectStream},
+    WebSocketStream,
+};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::de::DeserializeSeed as _;
+use tungstenite::protocol::Message;
+use twilight_model::id::{
+    marker::{GuildMarker, UserMarker},
+    Id,
+};
 
 /// Unmanaged voice connection to a websocket.
 ///
@@ -102,7 +107,7 @@ impl Connection {
             .await
             .map_err(Into::into)
     }
-    
+
     /// Gets session information.
     pub fn session(&self) -> &Session {
         &self.session
@@ -115,12 +120,15 @@ impl Connection {
     async fn handshake(&mut self) -> Result<RtpSocket, Error> {
         debug!("begin websocket handshake");
 
-        send(&mut self.wss, &GatewayEvent::Identify(Identify {
-            guild_id: self.session.guild_id,
-            user_id: self.session.user_id,
-            session_id: self.session.session_id.clone(),
-            token: self.session.token.clone(),
-        }))
+        send(
+            &mut self.wss,
+            &GatewayEvent::Identify(Identify {
+                guild_id: self.session.guild_id,
+                user_id: self.session.user_id,
+                session_id: self.session.session_id.clone(),
+                token: self.session.token.clone(),
+            }),
+        )
         .await?;
 
         // wait for hello and ready events
@@ -167,7 +175,10 @@ impl Connection {
 
         // choose encryption mode
         // order: lite > suffix > normal
-        let mode = ready.modes.iter().find(|&m| *m == EncryptionMode::Lite)
+        let mode = ready
+            .modes
+            .iter()
+            .find(|&m| *m == EncryptionMode::Lite)
             .or_else(|| ready.modes.iter().find(|&m| *m == EncryptionMode::Suffix))
             .or_else(|| ready.modes.iter().find(|&m| *m == EncryptionMode::Normal))
             .cloned()
@@ -177,20 +188,27 @@ impl Connection {
             EncryptionMode::Normal => rtp::EncryptionMode::Normal,
             EncryptionMode::Suffix => rtp::EncryptionMode::Suffix,
             EncryptionMode::Lite => rtp::EncryptionMode::Lite,
-            mode => return Err(Error::Protocol(ProtocolError::UnsupportedEncryptionMode(mode))),
+            mode => {
+                return Err(Error::Protocol(ProtocolError::UnsupportedEncryptionMode(
+                    mode,
+                )))
+            }
         };
 
         debug!("selected encryption mode {}", mode);
 
         // select protocol
-        send(&mut self.wss, &GatewayEvent::SelectProtocol(SelectProtocol {
-            protocol: String::from("udp"),
-            data: SelectProtocolData {
-                address: format!("{}", ip.ip()),
-                port: ip.port(),
-                mode,
-            },
-        }))
+        send(
+            &mut self.wss,
+            &GatewayEvent::SelectProtocol(SelectProtocol {
+                protocol: String::from("udp"),
+                data: SelectProtocolData {
+                    address: format!("{}", ip.ip()),
+                    port: ip.port(),
+                    mode,
+                },
+            }),
+        )
         .await?;
 
         // wait for response
@@ -231,11 +249,14 @@ impl Connection {
     async fn resume(&mut self) -> Result<Option<RtpSocket>, Error> {
         debug!("begin websocket resume handshake");
 
-        send(&mut self.wss, &GatewayEvent::Resume(Resume {
-            guild_id: self.session.guild_id,
-            session_id: self.session.session_id.clone(),
-            token: self.session.token.clone(),
-        }))
+        send(
+            &mut self.wss,
+            &GatewayEvent::Resume(Resume {
+                guild_id: self.session.guild_id,
+                session_id: self.session.session_id.clone(),
+                token: self.session.token.clone(),
+            }),
+        )
         .await?;
 
         // wait for response
@@ -275,10 +296,12 @@ async fn recv(
                     match event {
                         Some(event) => {
                             let mut json = serde_json::Deserializer::from_str(&msg);
-                            
+
                             match event.deserialize(&mut json) {
                                 Ok(event) => return Some(Ok(event)),
-                                Err(err) => return Some(Err(Error::Protocol(ProtocolError::Json(err)))),
+                                Err(err) => {
+                                    return Some(Err(Error::Protocol(ProtocolError::Json(err))))
+                                }
                             }
                         }
                         None => {
@@ -395,4 +418,3 @@ impl Default for Heartbeater {
         Heartbeater::new(15.0)
     }
 }
-

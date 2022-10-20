@@ -2,15 +2,18 @@
 
 use serde::{
     de::{
-        self, value::U8Deserializer, Deserializer, DeserializeSeed, Visitor,
-        MapAccess, Unexpected, IntoDeserializer, IgnoredAny,
+        self, value::U8Deserializer, DeserializeSeed, Deserializer, IgnoredAny, IntoDeserializer,
+        MapAccess, Unexpected, Visitor,
     },
-    ser::{Serializer, SerializeStruct as _},
-    Serialize, Deserialize,
+    ser::{SerializeStruct as _, Serializer},
+    Deserialize, Serialize,
 };
-use serde_repr::{Serialize_repr, Deserialize_repr};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::fmt::{self, Debug, Display, Formatter};
-use twilight_model::id::{Id, marker::{GuildMarker, UserMarker}};
+use twilight_model::id::{
+    marker::{GuildMarker, UserMarker},
+    Id,
+};
 
 /// Raw gateway event.
 #[derive(Debug)]
@@ -41,7 +44,7 @@ pub enum OpCode {
     Resume = 7,
     Hello = 8,
     Resumed = 9,
-    ClientDisconnect = 13
+    ClientDisconnect = 13,
 }
 
 impl GatewayEvent {
@@ -97,9 +100,7 @@ pub struct GatewayEventDeserializer {
 impl GatewayEventDeserializer {
     /// Creates a new `GatewayEventDeserializer`.
     pub const fn new(op: u8) -> GatewayEventDeserializer {
-        GatewayEventDeserializer {
-            op,
-        }
+        GatewayEventDeserializer { op }
     }
 
     /// Scans the JSON payload for identification data.
@@ -184,7 +185,9 @@ impl<'de> DeserializeSeed<'de> for GatewayEventDeserializer {
                     OpCode::SelectProtocol => self.get_d(map).map(GatewayEvent::SelectProtocol),
                     OpCode::Ready => self.get_d(map).map(GatewayEvent::Ready),
                     OpCode::Heartbeat => self.get_d(map).map(GatewayEvent::Heartbeat),
-                    OpCode::SessionDescription => self.get_d(map).map(GatewayEvent::SessionDescription),
+                    OpCode::SessionDescription => {
+                        self.get_d(map).map(GatewayEvent::SessionDescription)
+                    }
                     OpCode::Speaking => self.get_d(map).map(GatewayEvent::Speaking),
                     OpCode::HeartbeatAck => self.get_d(map).map(GatewayEvent::HeartbeatAck),
                     OpCode::Resume => self.get_d(map).map(GatewayEvent::Resume),
@@ -194,7 +197,7 @@ impl<'de> DeserializeSeed<'de> for GatewayEventDeserializer {
                 }
             }
         }
-        
+
         deserializer.deserialize_struct("GatewayEvent", &["d"], GatewayEventVisitor(self.op))
     }
 }
@@ -361,4 +364,3 @@ impl<'de> Deserialize<'de> for EncryptionMode {
         deserializer.deserialize_str(EncryptionModeVisitor)
     }
 }
-

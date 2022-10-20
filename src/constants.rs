@@ -30,4 +30,3 @@ pub const STEREO_FRAME_BYTE_SIZE: usize = STEREO_FRAME_SIZE * std::mem::size_of:
 ///
 /// Set a safe amount below the Ethernet MTU to avoid fragmentation/rejection.
 pub const VOICE_PACKET_MAX: usize = 1460;
-

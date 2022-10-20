@@ -1,7 +1,7 @@
 //! Connection error.
 
-use tungstenite::protocol::frame::{CloseFrame, coding::CloseCode};
 use std::fmt::{self, Debug, Display, Formatter};
+use tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
 
 use super::rtp::IpDiscoveryError;
 
@@ -97,7 +97,7 @@ impl Display for ProtocolError {
             ProtocolError::Json(err) => Display::fmt(err, f),
             ProtocolError::UnsupportedEncryptionMode(mode) => {
                 write!(f, "unsupported encryption mode \"{}\"", mode)
-            },
+            }
             ProtocolError::MissingOpcode => {
                 write!(f, "payload missing opcode")
             }
@@ -166,4 +166,3 @@ impl Code {
         }
     }
 }
-

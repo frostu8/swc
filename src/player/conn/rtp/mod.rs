@@ -2,10 +2,10 @@
 
 mod crypto;
 
-pub use crypto::{Encryptor, EncryptionMode};
+pub use crypto::{EncryptionMode, Encryptor};
 
-use std::net::{SocketAddr, IpAddr, AddrParseError};
 use std::fmt::{self, Debug, Display, Formatter};
+use std::net::{AddrParseError, IpAddr, SocketAddr};
 use std::str::Utf8Error;
 
 use tokio::net::UdpSocket;
@@ -56,7 +56,8 @@ impl Socket {
         self.timestamp = self.timestamp.overflowing_add(MONO_FRAME_SIZE as u32).0;
 
         // encrypt packet
-        self.encryptor.encrypt(&mut packet)
+        self.encryptor
+            .encrypt(&mut packet)
             .map_err(|_| anyhow::anyhow!("failed to encrypt packet"))?;
 
         // send packet
@@ -73,7 +74,7 @@ impl Socket {
 
 /// RTP packet.
 ///
-/// Acts as a buffer where packets can be made and sent across the internet. 
+/// Acts as a buffer where packets can be made and sent across the internet.
 /// `Packet`'s [`Default`] implementation returns a `Packet` initialized with a
 /// `[u8; crate::constants::VOICE_PACKET_MAX]`.
 pub struct Packet<T> {
@@ -197,10 +198,7 @@ impl Default for Packet<[u8; VOICE_PACKET_MAX]> {
 ///
 /// Accepts a UDP socket connected to a Discord endpoint. **While the client is
 /// waiting for a UDP response, unrelated packets will throw errors.**
-pub async fn ip_discovery(
-    udp: &UdpSocket,
-    ssrc: u32,
-) -> Result<SocketAddr, IpDiscoveryError> {
+pub async fn ip_discovery(udp: &UdpSocket, ssrc: u32) -> Result<SocketAddr, IpDiscoveryError> {
     const REQ_HEADER: &[u8] = &[0x00, 0x01, 0x00, 0x46];
     const RES_HEADER: &[u8] = &[0x00, 0x02, 0x00, 0x46];
 
@@ -274,21 +272,20 @@ impl Display for IpDiscoveryError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             IpDiscoveryError::InvalidHeader([b1, b2, b3, b4]) => write!(
-                f, "invalid header, expected 00 02 00 46, got {:02X} {:02X} {:02X} {:02X}", 
+                f,
+                "invalid header, expected 00 02 00 46, got {:02X} {:02X} {:02X} {:02X}",
                 b1, b2, b3, b4,
             ),
-            IpDiscoveryError::InvalidSsrc(exp, got) => write!(
-                f, "invalid ssrc, expected {}, got {}", exp, got,
-            ),
-            IpDiscoveryError::InvalidAddrUtf8(err) => write!(
-                f, "address has invalid utf8: {}", err,
-            ),
-            IpDiscoveryError::InvalidAddr(err) => write!(
-                f, "address is badly formed: {}", err,
-            ),
-            IpDiscoveryError::InvalidSize(size) => write!(
-                f, "packet is invalid size: {} bytes", size
-            ),
+            IpDiscoveryError::InvalidSsrc(exp, got) => {
+                write!(f, "invalid ssrc, expected {}, got {}", exp, got,)
+            }
+            IpDiscoveryError::InvalidAddrUtf8(err) => {
+                write!(f, "address has invalid utf8: {}", err,)
+            }
+            IpDiscoveryError::InvalidAddr(err) => write!(f, "address is badly formed: {}", err,),
+            IpDiscoveryError::InvalidSize(size) => {
+                write!(f, "packet is invalid size: {} bytes", size)
+            }
             IpDiscoveryError::Io(err) => write!(f, "io: {}", err),
         }
     }
@@ -303,4 +300,3 @@ impl std::error::Error for IpDiscoveryError {
         }
     }
 }
-
