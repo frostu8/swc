@@ -2,6 +2,7 @@
 
 mod conn;
 mod manager;
+pub mod source;
 
 pub use manager::Manager;
 
@@ -13,7 +14,8 @@ use twilight_model::{
     id::{Id, marker::{GuildMarker, UserMarker}},
     gateway::payload::incoming::{VoiceStateUpdate, VoiceServerUpdate},
 };
-use conn::{Connection, Session};
+use conn::{Connection, Session, Event, RtpPacket, payload::Speaking};
+use source::Source;
 
 /// A music player for a specific guild.
 #[derive(Clone)]
@@ -131,7 +133,7 @@ async fn run(
     debug!("got new session; establishing ws connection...");
 
     let timeout = Instant::now() + Duration::from_millis(5000);
-    let mut conn = match timeout_at(timeout, Connection::connect(session)).await {
+    let (mut conn, mut rtp) = match timeout_at(timeout, Connection::connect(session)).await {
         Ok(Ok(conn)) => conn,
         Ok(Err(err)) => {
             error!("connect: {}", err);
@@ -143,12 +145,36 @@ async fn run(
         }
     };
 
+    // TODO: testing
+    let mut source = Source::new("https://www.youtube.com/watch?v=7O-TZdXh7Y4").await.unwrap();
+    let mut packet = RtpPacket::default();
+
+    let mut next_burst = Instant::now();
+    let mut burst = 0;
+    let burst_amount = 5;
+
+    conn.send(Speaking {
+        speaking: 1,
+        ssrc: rtp.ssrc(),
+        delay: Some(0),
+    })
+    .await
+    .unwrap();
+
     loop {
         tokio::select! {
-            ev = conn.next() => {
+            biased;
+
+            // voice websocket event
+            ev = conn.recv() => {
                 match ev {
+                    Some(Ok(Event::ChangeSocket(new_rtp))) => {
+                        // update socket
+                        rtp = new_rtp;
+                    }
                     Some(Ok(ev)) => {
                         // discard event
+                        debug!("voice ev: {:?}", ev);
                     }
                     Some(Err(err)) if err.disconnected() => {
                         // normal disconnect event
@@ -163,9 +189,10 @@ async fn run(
                     None => break
                 }
             }
-            Some(ev) = gateway.recv() => {
+            // main gateway event
+            ev = gateway.recv() => {
                 match ev {
-                    GatewayEvent::VoiceServerUpdate(vseu) => {
+                    Some(GatewayEvent::VoiceServerUpdate(vseu)) => {
                         // server update; reconnect
                         let session = Session {
                             guild_id, user_id,
@@ -174,24 +201,68 @@ async fn run(
                             session_id: conn.session().session_id.clone(),
                         };
                         let timeout = Instant::now() + Duration::from_millis(5000);
-                        conn = match timeout_at(timeout, Connection::connect(session)).await {
+                        (conn, rtp) = match timeout_at(timeout, Connection::connect(session)).await {
                             Ok(Ok(conn)) => conn,
                             Ok(Err(err)) => {
                                 error!("connect: {}", err);
-                                return;
+                                break;
                             }
                             Err(_) => {
                                 error!("player reconnection timed out after 5000ms!");
-                                return;
+                                break;
                             }
                         };
                     }
-                    GatewayEvent::VoiceStateUpdate(_vstu) => {
+                    Some(GatewayEvent::VoiceStateUpdate(_vstu)) => {
                         // TODO: handle state update
+                    }
+                    None => {
+                        error!("gateway closed unexpectedly");
+                        break;
+                    }
+                }
+            }
+            _ = sleep_until(next_burst) => {
+                burst = 5;
+                next_burst = Instant::now() + crate::constants::TIMESTEP_LENGTH * burst_amount;
+            }
+            // completion of packet reading event
+            result = source.read(packet.payload_mut()), if burst > 0 => {
+                match result {
+                    Ok(len) => {
+                        // encrypt and send packet
+                        if len > 0 {
+                            packet.set_payload_len(len);
+                            match rtp.send(packet).await {
+                                Ok(()) => (),
+                                Err(err) => {
+                                    error!("packet: {}", err);
+                                    break;
+                                }
+                            }
+                            packet = RtpPacket::default();
+                        }
+
+                        burst -= 1;
+                    }
+                    Err(err) => {
+                        error!("audio read: {}", err);
+                        break;
                     }
                 }
             }
         }
     }
+
+    // kill source gracefully
+    let _ = source.kill().await;
+}
+
+async fn until<F>(deadline: Instant, fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    sleep_until(deadline).await;
+    fut.await
 }
 

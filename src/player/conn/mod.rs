@@ -5,10 +5,11 @@ pub mod payload;
 pub mod rtp;
 
 pub use error::Error;
+pub use rtp::{Socket as RtpSocket, Packet as RtpPacket};
 
 use error::ApiError;
 use payload::{GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify, SelectProtocol, SelectProtocolData, SessionDescription, Resume};
-use rtp::EncryptionMode;
+use rtp::{EncryptionMode, Encryptor};
 
 use tokio::time::{Instant, Duration, sleep_until};
 use tokio::net::UdpSocket;
@@ -31,7 +32,7 @@ pub struct Connection {
 
 impl Connection {
     /// Establishes a connection to an endpoint.
-    pub async fn connect(session: Session) -> Result<Connection, Error> {
+    pub async fn connect(session: Session) -> Result<(Connection, RtpSocket), Error> {
         let (wss, _response) = connect_async(format!("wss://{}/?v=4", session.endpoint)).await?;
 
         let mut conn = Connection {
@@ -39,15 +40,15 @@ impl Connection {
             wss,
             heartbeater: Default::default(),
         };
-        conn.handshake().await?;
+        let rtp = conn.handshake().await?;
 
-        Ok(conn)
+        Ok((conn, rtp))
     }
 
     /// Polls for the next event.
     ///
     /// This is (should be) cancel-safe.
-    pub async fn next(&mut self) -> Option<Result<Event, Error>> {
+    pub async fn recv(&mut self) -> Option<Result<Event, Error>> {
         loop {
             tokio::select! {
                 // next event
@@ -71,7 +72,8 @@ impl Connection {
                         }
                         Some(Err(err)) if err.can_resume() => {
                             match self.resume().await {
-                                Ok(()) => (),
+                                Ok(Some(rtp)) => return Some(Ok(Event::ChangeSocket(rtp))),
+                                Ok(None) => (),
                                 Err(err) => return Some(Err(err)),
                             }
                         }
@@ -89,6 +91,13 @@ impl Connection {
             }
         }
     }
+
+    /// Sends an event to the remote endpoint.
+    pub async fn send(&mut self, command: impl Command) -> Result<(), Error> {
+        send(&mut self.wss, &command.to_event())
+            .await
+            .map_err(Into::into)
+    }
     
     /// Gets session information.
     pub fn session(&self) -> &Session {
@@ -99,7 +108,7 @@ impl Connection {
     /// more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-    async fn handshake(&mut self) -> Result<(), Error> {
+    async fn handshake(&mut self) -> Result<RtpSocket, Error> {
         debug!("begin websocket handshake");
 
         send(&mut self.wss, &GatewayEvent::Identify(Identify {
@@ -197,14 +206,19 @@ impl Connection {
 
         info!("voice connected to {}", self.session.endpoint);
 
-        Ok(())
+        Ok(RtpSocket::new(
+            udp,
+            ready.ssrc,
+            Encryptor::new(desc.mode, desc.secret_key),
+        ))
     }
 
     /// Completes a session resume handshake with the voice server. See
-    /// [discord's docs][1] for more information.
+    /// [discord's docs][1] for more information. If a reconnect is required,
+    /// also returns the new `RtpSocket`.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-    async fn resume(&mut self) -> Result<(), Error> {
+    async fn resume(&mut self) -> Result<Option<RtpSocket>, Error> {
         debug!("begin websocket resume handshake");
 
         send(&mut self.wss, &GatewayEvent::Resume(Resume {
@@ -225,7 +239,7 @@ impl Connection {
                 }
                 Err(Error::Closed(_)) | Err(Error::Api(_)) => {
                     warn!("resume failed, attempting to reconnect");
-                    return self.handshake().await;
+                    return Ok(Some(self.handshake().await?));
                 }
                 Err(err) => {
                     error!("ws error: {}", err);
@@ -234,7 +248,7 @@ impl Connection {
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -317,6 +331,19 @@ pub struct Session {
 pub enum Event {
     Speaking(Speaking),
     ClientDisconnect(ClientDisconnect),
+    /// Voice connection was disconnected and managed to reform the connection.
+    ChangeSocket(RtpSocket),
+}
+
+/// Voice command.
+pub trait Command {
+    fn to_event(self) -> GatewayEvent;
+}
+
+impl Command for Speaking {
+    fn to_event(self) -> GatewayEvent {
+        GatewayEvent::Speaking(self)
+    }
 }
 
 /// Manages heartbeat state.

@@ -3,9 +3,9 @@ use std::{env, sync::Arc};
 use twilight_gateway::{Cluster, Intents};
 use futures_util::StreamExt;
 
-use swc::player::{Player, Manager};
-use twilight_model::gateway::{payload::outgoing::update_voice_state::UpdateVoiceState, event::Event};
-use twilight_model::id::{Id, marker::{ChannelMarker, GuildMarker, UserMarker}};
+use swc::player::Manager;
+use twilight_model::gateway::event::Event;
+use twilight_model::id::Id;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
                 // initialize manager
                 manager = Some(Manager::new(Arc::clone(&cluster), user_id));
-                manager.as_ref().unwrap().join(Id::new(683483117473759249), Id::new(683483410962055270)).await;
+                manager.as_ref().unwrap().join(Id::new(952331087714070548), Id::new(972610486229168244)).await;
             }
             Event::VoiceStateUpdate(ev) => {
                 if let Some(manager) = &manager {

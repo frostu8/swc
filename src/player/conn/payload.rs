@@ -237,7 +237,7 @@ pub struct Ready {
 /// The `SESSION_DESCRIPTION` payload.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SessionDescription {
-    pub mode: String,
+    pub mode: EncryptionMode,
     pub secret_key: [u8; 32],
 }
 
