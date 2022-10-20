@@ -8,8 +8,12 @@ pub use error::Error;
 pub use rtp::{Socket as RtpSocket, Packet as RtpPacket};
 
 use error::ApiError;
-use payload::{GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify, SelectProtocol, SelectProtocolData, SessionDescription, Resume};
-use rtp::{EncryptionMode, Encryptor};
+use payload::{
+    GatewayEvent, Speaking, ClientDisconnect, Heartbeat, Hello, Ready, Identify,
+    SelectProtocol, SelectProtocolData, SessionDescription, Resume,
+    EncryptionMode,
+};
+use rtp::Encryptor;
 
 use tokio::time::{Instant, Duration, sleep_until};
 use tokio::net::UdpSocket;
@@ -166,9 +170,15 @@ impl Connection {
         let mode = ready.modes.iter().find(|&m| *m == EncryptionMode::Lite)
             .or_else(|| ready.modes.iter().find(|&m| *m == EncryptionMode::Suffix))
             .or_else(|| ready.modes.iter().find(|&m| *m == EncryptionMode::Normal))
-            // TODO: graceful error handling in case of no encryption modes
             .cloned()
             .unwrap();
+
+        let encryptor_mode = match mode {
+            EncryptionMode::Normal => rtp::EncryptionMode::Normal,
+            EncryptionMode::Suffix => rtp::EncryptionMode::Suffix,
+            EncryptionMode::Lite => rtp::EncryptionMode::Lite,
+            mode => return Err(Error::UnsupportedEncryptionMode(mode)),
+        };
 
         debug!("selected encryption mode {}", mode);
 
@@ -209,7 +219,7 @@ impl Connection {
         Ok(RtpSocket::new(
             udp,
             ready.ssrc,
-            Encryptor::new(desc.mode, desc.secret_key),
+            Encryptor::new(encryptor_mode, desc.secret_key),
         ))
     }
 

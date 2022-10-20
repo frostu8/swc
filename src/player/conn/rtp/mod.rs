@@ -1,19 +1,18 @@
 //! Low-level RTP protocol types.
 
+mod crypto;
+
+pub use crypto::{Encryptor, EncryptionMode};
+
 use std::net::{SocketAddr, IpAddr, AddrParseError};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::str::Utf8Error;
 
-use serde::ser::{Serialize, Serializer};
-use serde::de::{self, Deserialize, Deserializer, Visitor};
-
 use tokio::net::UdpSocket;
-
-use rand::{RngCore, Rng, SeedableRng, rngs::{StdRng, OsRng}};
 
 use crate::constants::{MONO_FRAME_SIZE, VOICE_PACKET_MAX};
 
-use xsalsa20poly1305::{XSalsa20Poly1305, TAG_SIZE, NONCE_SIZE, aead::{self, KeyInit, AeadInPlace}};
+use xsalsa20poly1305::TAG_SIZE;
 
 /// A socket for RTP packets.
 #[derive(Debug)]
@@ -191,199 +190,6 @@ where
 impl Default for Packet<[u8; VOICE_PACKET_MAX]> {
     fn default() -> Packet<[u8; VOICE_PACKET_MAX]> {
         Packet::new([0u8; VOICE_PACKET_MAX])
-    }
-}
-
-/// Encrypts outgoing packets using [`xsalsa20poly1305`].
-pub struct Encryptor {
-    aead: XSalsa20Poly1305,
-    state: EncryptorState,
-}
-
-enum EncryptorState {
-    Normal,
-    Suffix(StdRng),
-    Lite(u32),
-}
-
-impl Encryptor {
-    /// Creates a new encryptor from a secret key and an encryption mode.
-    ///
-    /// # Panics
-    /// Panics if `mode` is [`EncryptionMode::Other`].
-    pub fn new(mode: EncryptionMode, secret_key: [u8; 32]) -> Encryptor {
-        Encryptor {
-            aead: XSalsa20Poly1305::new_from_slice(&secret_key)
-                .expect("32-bytes enforced by compiler"),
-            state: match mode {
-                EncryptionMode::Normal => EncryptorState::Normal,
-                EncryptionMode::Suffix => EncryptorState::Suffix(StdRng::from_entropy()),
-                EncryptionMode::Lite => EncryptorState::Lite(OsRng.gen()),
-                EncryptionMode::Other(s) => panic!("unsupported encryption: {}", s),
-            },
-        }
-    }
-
-    /// Encrypts packet in-place, updating any necessary values.
-    pub fn encrypt<T>(&mut self, pkt: &mut Packet<T>) -> Result<(), aead::Error>
-    where
-        T: AsRef<[u8]> + AsMut<[u8]>,
-    {
-        match &mut self.state {
-            EncryptorState::Normal => {
-                // use the packet header as a nonce
-                let mut nonce = [0u8; NONCE_SIZE];
-                (&mut nonce[0..Packet::<T>::HEADER_LEN]).copy_from_slice(pkt.header());
-
-                // encrypt
-                let payload_len = pkt.payload_len();
-                let tag = self.aead.encrypt_in_place_detached(
-                    &nonce.into(),
-                    b"",
-                    &mut pkt.payload_mut()[..payload_len],
-                )?;
-
-                pkt.tag_mut().copy_from_slice(&tag[..]);
-
-                // no need to finalize anything here; we're done.
-                Ok(())
-            }
-            EncryptorState::Suffix(rng) => {
-                // generate a new nonce
-                let mut nonce = [0u8; NONCE_SIZE];
-                rng.fill_bytes(&mut nonce);
-
-                // encrypt
-                let payload_len = pkt.payload_len();
-                let tag = self.aead.encrypt_in_place_detached(
-                    &nonce.into(),
-                    b"",
-                    &mut pkt.payload_mut()[..payload_len],
-                )?;
-
-                pkt.tag_mut().copy_from_slice(&tag[..]);
-
-                // append nonce to the end
-                (&mut pkt.payload_mut()[payload_len..payload_len + NONCE_SIZE])
-                    .copy_from_slice(&nonce);
-                pkt.set_payload_len(payload_len + NONCE_SIZE);
-
-                Ok(())
-            }
-            EncryptorState::Lite(next_nonce) => {
-                // get nonce and increment
-                let mut nonce = [0u8; NONCE_SIZE];
-                (&mut nonce[0..4]).copy_from_slice(&next_nonce.to_be_bytes());
-                *next_nonce = next_nonce.overflowing_add(1).0;
-
-                // encrypt
-                let payload_len = pkt.payload_len();
-                let tag = self.aead.encrypt_in_place_detached(
-                    &nonce.into(),
-                    b"",
-                    &mut pkt.payload_mut()[..payload_len],
-                )?;
-
-                pkt.tag_mut().copy_from_slice(&tag[..]);
-
-                // append nonce to the end
-                (&mut pkt.payload_mut()[payload_len..payload_len + 4])
-                    .copy_from_slice(&nonce[0..4]);
-                pkt.set_payload_len(payload_len + 4);
-
-                Ok(())
-            }
-        }
-    }
-}
-
-impl Debug for Encryptor {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_str("Encryptor(_)")
-    }
-}
-
-/// Discord encryption scheme.
-///
-/// See [discord docs][1] for more info.
-///
-/// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-udp-connection-encryption-modes
-// TODO: this should probably be moved to super::payload
-#[derive(Clone, Debug, PartialEq)]
-pub enum EncryptionMode {
-    /// The nonce bytes are the RTP header
-    Normal,
-    /// The nonce bytes are 24-bytes appended to the payload of the RTP packet.
-    ///
-    /// Nonce generated randomly.
-    Suffix,
-    /// The nonce bytes are 4-bytes appended to the payload of the RTP packet.
-    ///
-    /// Nonce generated incrementally.
-    Lite,
-    /// Other encryption modes supported by discord, but not by this library.
-    Other(String),
-}
-
-impl EncryptionMode {
-    const NORMAL_STR: &'static str = "xsalsa20_poly1305";
-    const SUFFIX_STR: &'static str = "xsalsa20_poly1305_suffix";
-    const LITE_STR: &'static str = "xsalsa20_poly1305_lite";
-
-    /// Returns the string representation of the mode.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Normal => Self::NORMAL_STR,
-            Self::Suffix => Self::SUFFIX_STR,
-            Self::Lite => Self::LITE_STR,
-            Self::Other(s) => s,
-        }
-    }
-}
-
-impl Display for EncryptionMode {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for EncryptionMode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for EncryptionMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct EncryptionModeVisitor;
-
-        impl<'de> Visitor<'de> for EncryptionModeVisitor {
-            type Value = EncryptionMode;
-
-            fn expecting(&self, f: &mut Formatter) -> fmt::Result {
-                f.write_str("a valid EncryptionMode")
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match v {
-                    EncryptionMode::NORMAL_STR => Ok(EncryptionMode::Normal),
-                    EncryptionMode::SUFFIX_STR => Ok(EncryptionMode::Suffix),
-                    EncryptionMode::LITE_STR => Ok(EncryptionMode::Lite),
-                    v => Ok(EncryptionMode::Other(v.to_owned())),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(EncryptionModeVisitor)
     }
 }
 

@@ -9,9 +9,8 @@ use serde::{
     Serialize, Deserialize,
 };
 use serde_repr::{Serialize_repr, Deserialize_repr};
-use std::fmt::{self, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use twilight_model::id::{Id, marker::{GuildMarker, UserMarker}};
-use super::rtp::EncryptionMode;
 
 /// Raw gateway event.
 #[derive(Debug)]
@@ -277,5 +276,89 @@ pub struct Hello {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ClientDisconnect {
     pub user_id: Id<UserMarker>,
+}
+
+/// Discord encryption scheme.
+///
+/// See [discord docs][1] for more info.
+///
+/// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-udp-connection-encryption-modes
+// TODO: this should probably be moved to super::payload
+#[derive(Clone, Debug, PartialEq)]
+pub enum EncryptionMode {
+    /// The nonce bytes are the RTP header
+    Normal,
+    /// The nonce bytes are 24-bytes appended to the payload of the RTP packet.
+    ///
+    /// Nonce generated randomly.
+    Suffix,
+    /// The nonce bytes are 4-bytes appended to the payload of the RTP packet.
+    ///
+    /// Nonce generated incrementally.
+    Lite,
+    /// Other encryption modes supported by discord, but not by this library.
+    Other(String),
+}
+
+impl EncryptionMode {
+    const NORMAL_STR: &'static str = "xsalsa20_poly1305";
+    const SUFFIX_STR: &'static str = "xsalsa20_poly1305_suffix";
+    const LITE_STR: &'static str = "xsalsa20_poly1305_lite";
+
+    /// Returns the string representation of the mode.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Normal => Self::NORMAL_STR,
+            Self::Suffix => Self::SUFFIX_STR,
+            Self::Lite => Self::LITE_STR,
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl Display for EncryptionMode {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for EncryptionMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EncryptionMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct EncryptionModeVisitor;
+
+        impl<'de> Visitor<'de> for EncryptionModeVisitor {
+            type Value = EncryptionMode;
+
+            fn expecting(&self, f: &mut Formatter) -> fmt::Result {
+                f.write_str("a valid EncryptionMode")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match v {
+                    EncryptionMode::NORMAL_STR => Ok(EncryptionMode::Normal),
+                    EncryptionMode::SUFFIX_STR => Ok(EncryptionMode::Suffix),
+                    EncryptionMode::LITE_STR => Ok(EncryptionMode::Lite),
+                    v => Ok(EncryptionMode::Other(v.to_owned())),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(EncryptionModeVisitor)
+    }
 }
 

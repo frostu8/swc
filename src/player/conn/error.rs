@@ -15,6 +15,7 @@ pub enum Error {
     Json(serde_json::Error),
     IpDiscovery(IpDiscoveryError),
     MissingOpcode,
+    UnsupportedEncryptionMode(super::payload::EncryptionMode),
 }
 
 impl Error {
@@ -46,6 +47,7 @@ impl Display for Error {
             Error::Json(err) => Display::fmt(err, f),
             Error::IpDiscovery(err) => Display::fmt(err, f),
             Error::MissingOpcode => f.write_str("missing opcode"),
+            Error::UnsupportedEncryptionMode(mode) => write!(f, "unsupported encryption mode: \"{}\"", mode),
         }
     }
 }
