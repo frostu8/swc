@@ -1,4 +1,4 @@
-//! Source management.
+//! Audio management.
 
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};

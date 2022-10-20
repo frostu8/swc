@@ -1,15 +1,19 @@
 //! Provides the audio [`Player`] and the player manager [`Manager`].
 
+pub mod audio;
 mod conn;
 mod manager;
-pub mod source;
+pub mod queue;
 
 pub use manager::Manager;
 
 use conn::{payload::Speaking, Connection, Event, RtpPacket, Session};
-use source::Source;
+use audio::Source as AudioSource;
+use queue::Source;
+
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{sleep_until, timeout_at, Duration, Instant};
+
 use twilight_model::{
     gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
     id::{
@@ -23,6 +27,7 @@ use twilight_model::{
 pub struct Player {
     guild_id: Id<GuildMarker>,
     gateway_tx: UnboundedSender<GatewayEvent>,
+    chsrc_tx: UnboundedSender<Source>,
 }
 
 impl Player {
@@ -35,14 +40,16 @@ impl Player {
         let guild_id = guild_id.into();
 
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
+        let (chsrc_tx, chsrc_rx) = mpsc::unbounded_channel();
 
         // spawn player task
-        tokio::spawn(run(guild_id, user_id, gateway_rx));
+        tokio::spawn(run(guild_id, user_id, gateway_rx, chsrc_rx));
 
         // create Player
         Player {
             gateway_tx,
             guild_id,
+            chsrc_tx,
         }
     }
 
@@ -90,6 +97,7 @@ async fn run(
     guild_id: Id<GuildMarker>,
     user_id: Id<UserMarker>,
     mut gateway: UnboundedReceiver<GatewayEvent>,
+    mut chsrc: UnboundedReceiver<Source>,
 ) {
     // begin initialization: wait for events
     let timeout = Instant::now() + Duration::from_millis(5000);
@@ -152,7 +160,7 @@ async fn run(
     };
 
     // TODO: testing
-    let mut source = Source::new("https://www.youtube.com/watch?v=7O-TZdXh7Y4")
+    let mut source = AudioSource::new("https://www.youtube.com/watch?v=7O-TZdXh7Y4")
         .await
         .unwrap();
     let mut packet = RtpPacket::default();
