@@ -40,7 +40,7 @@ impl Socket {
     /// Sends a packet over the socket, filling in its metadata and then
     /// encrypting it.
     #[inline]
-    pub async fn send<T>(&mut self, mut packet: Packet<T>) -> Result<(), anyhow::Error>
+    pub async fn send<T>(&mut self, packet: &mut Packet<T>) -> Result<(), anyhow::Error>
     where
         T: AsRef<[u8]> + AsMut<[u8]>,
     {
@@ -57,7 +57,7 @@ impl Socket {
 
         // encrypt packet
         self.encryptor
-            .encrypt(&mut packet)
+            .encrypt(packet)
             .map_err(|_| anyhow::anyhow!("failed to encrypt packet"))?;
 
         // send packet

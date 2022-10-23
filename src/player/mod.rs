@@ -7,9 +7,10 @@ pub mod queue;
 
 pub use manager::Manager;
 
-use conn::{payload::Speaking, Connection, Event, RtpPacket, Session};
+use conn::{payload::Speaking, Connection, Event, RtpPacket, RtpSocket, Session};
 use audio::Source as AudioSource;
 use queue::Source;
+use crate::constants::TIMESTEP_LENGTH;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{sleep_until, timeout_at, Duration, Instant};
@@ -107,12 +108,8 @@ async fn run(
     debug!("waiting for VoiceStateUpdate and VoiceServerUpdate...");
 
     loop {
-        tokio::select! {
-            _ = sleep_until(timeout) => {
-                error!("player initialization timed out after 5000ms!");
-                return;
-            }
-            Some(ev) = gateway.recv() => {
+        match timeout_at(timeout, gateway.recv()).await {
+            Ok(Some(ev)) => {
                 match ev {
                     GatewayEvent::VoiceStateUpdate(ev) if ev.0.user_id == user_id => {
                         vstu = Some(ev);
@@ -126,6 +123,14 @@ async fn run(
                 if vstu.is_some() && vseu.is_some() {
                     break;
                 }
+            }
+            Ok(None) => {
+                error!("gateway closed!");
+                return;
+            }
+            Err(_) => {
+                error!("player initialization timed out after 5000ms!");
+                return;
             }
         }
     }
@@ -159,15 +164,10 @@ async fn run(
         }
     };
 
-    // TODO: testing
-    let mut source = AudioSource::new("https://www.youtube.com/watch?v=7O-TZdXh7Y4")
+    let source = AudioSource::new("https://youtu.be/IAkn-4qoK_Y")
         .await
         .unwrap();
-    let mut packet = RtpPacket::default();
-
-    let mut next_burst = Instant::now();
-    let mut burst = 0;
-    let burst_amount = 5;
+    let mut stream = RtpStreamer::new(source);
 
     conn.send(Speaking {
         speaking: 1,
@@ -238,31 +238,14 @@ async fn run(
                     }
                 }
             }
-            _ = sleep_until(next_burst) => {
-                burst = 5;
-                next_burst = Instant::now() + crate::constants::TIMESTEP_LENGTH * burst_amount;
-            }
-            // completion of packet reading event
-            result = source.read(packet.payload_mut()), if burst > 0 => {
+            // streaming audio
+            result = stream.stream(&mut rtp) => {
                 match result {
-                    Ok(len) => {
-                        // encrypt and send packet
-                        if len > 0 {
-                            packet.set_payload_len(len);
-                            match rtp.send(packet).await {
-                                Ok(()) => (),
-                                Err(err) => {
-                                    error!("packet: {}", err);
-                                    break;
-                                }
-                            }
-                            packet = RtpPacket::default();
-                        }
-
-                        burst -= 1;
+                    Ok(()) => {
+                        warn!("audio ended");
                     }
                     Err(err) => {
-                        error!("audio read: {}", err);
+                        error!("audio: {}", err);
                         break;
                     }
                 }
@@ -271,13 +254,83 @@ async fn run(
     }
 
     // kill source gracefully
-    let _ = source.kill().await;
+    let _ = stream.into_inner().kill().await;
 }
 
-async fn until<F>(deadline: Instant, fut: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    sleep_until(deadline).await;
-    fut.await
+/// Audio packet streamer.
+///
+/// Most of the time, we receive audio data faster than its playback speed. This
+/// is actually really awesome! Well, until you realize that sending packets at
+/// 4x the actual speed of the audio is going to cause some buffer issues and
+/// also make you tonight's biggest loser.
+struct RtpStreamer {
+    source: AudioSource,
+
+    packet: RtpPacket<[u8; crate::constants::VOICE_PACKET_MAX]>,
+    next_packet: Instant,
+    ready: bool,
+}
+
+impl RtpStreamer {
+    /// Create a new `RtpStreamer`.
+    pub fn new(source: AudioSource) -> RtpStreamer {
+        RtpStreamer {
+            source,
+            packet: RtpPacket::default(),
+            next_packet: Instant::now(),
+            ready: false,
+        }
+    }
+
+    /// Extracts the inner [`AudioSource`].
+    pub fn into_inner(self) -> AudioSource {
+        self.source
+    }
+
+    /// Streams the inner audio over the [`RtpSocket`].
+    ///
+    /// Doesn't return until all of the audio has been streamed. Cancel-safe.
+    pub async fn stream(
+        &mut self,
+        rtp: &mut RtpSocket,
+    ) -> Result<(), anyhow::Error> {
+        loop {
+            tokio::select! {
+                () = sleep_until(self.next_packet), if self.ready => {
+                    // send packet
+                    rtp.send(&mut self.packet).await?;
+
+                    // setup for next packet
+                    self.packet = RtpPacket::default();
+                    self.next_packet = self.next_packet + TIMESTEP_LENGTH;
+                    self.ready = false;
+                }
+                result = self.source.read(self.packet.payload_mut()), if !self.ready => {
+                    let len = result?;
+
+                    if len > 0 {
+                        self.packet.set_payload_len(len);
+                        self.ready = true;
+
+                        let now = Instant::now();
+                        if self.next_packet < now {
+                            warn!("overloaded! {}ms", (now - self.next_packet).as_millis());
+                            self.next_packet = Instant::now();
+                        }
+                    } else {
+                        // we are at the end of the stream, exit
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn sleep_until_optional(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
 }

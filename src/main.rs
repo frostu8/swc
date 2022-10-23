@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
                 manager
                     .as_ref()
                     .unwrap()
-                    .join(Id::new(952331087714070548), Id::new(972610486229168244))
+                    .join(Id::new(683483117473759249), Id::new(683483410962055270))
                     .await;
             }
             Event::VoiceStateUpdate(ev) => {

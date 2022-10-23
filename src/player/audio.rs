@@ -35,11 +35,13 @@ impl Source {
                 .read(bytemuck::cast_slice_mut(&mut self.buf[self.buf_len..]))
                 .await?;
 
-            self.buf_len += len / std::mem::size_of::<f32>();
-            if self.buf_len >= self.buf.len() {
-                break;
+            if len > 0 {
+                self.buf_len += len / std::mem::size_of::<f32>();
+                if self.buf_len >= self.buf.len() {
+                    break;
+                }
             } else {
-                warn!("buf_len={}", self.buf_len)
+                return Ok(0);
             }
         }
 
