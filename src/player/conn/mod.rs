@@ -268,12 +268,8 @@ impl Connection {
                 Ok(ev) => {
                     warn!("unexpected event: {:?}", ev);
                 }
-                Err(Error::Closed(_)) | Err(Error::Api(_)) => {
-                    warn!("resume failed, attempting to reconnect");
-                    return Ok(Some(self.handshake().await?));
-                }
                 Err(err) => {
-                    error!("ws error: {}", err);
+                    error!("resumed failed: {}", err);
                     return Err(err);
                 }
             }
