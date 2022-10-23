@@ -1,10 +1,8 @@
-//! Multithreaded, shared music queues based on `youtube-dl`.
+//! Rich music queues.
 
 use tokio::process::Command;
-use tokio::sync::RwLock;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use std::collections::VecDeque;
 use std::process::Stdio;
 
@@ -16,18 +14,15 @@ use super::audio::{Source as AudioSource, Error as AudioError};
 
 use crate::ytdl;
 
-/// A multithreaded, shared music queue.
+/// A triple-buffer music queue.
 ///
-/// [`Queue::next`]doesn't actually remove the source. Instead, the source moves
-/// into the graveyard of the queue. If the graveyard gets too large (determined
-/// by `keep_count` of [`Queue::new`]), it is then disposed of. This is to
+/// [`Queue::next`] doesn't actually remove the source. Instead, the source
+/// moves into the graveyard of the queue. If the graveyard gets too large
+/// (determined by `keep_count` of [`Queue::new`]), it is then disposed of. This is to
 /// support quick backtracking in the queue.
-pub struct Queue(Arc<QueueRef>);
-
-struct QueueRef {
-    queue: RwLock<VecDeque<Source>>,
-    // this is the index **after** the currently playing song
-    head: AtomicUsize,
+pub struct Queue {
+    queue: VecDeque<Source>,
+    head: usize,
 
     // amount to keep in the graveyard
     keep_count: usize,
@@ -36,66 +31,48 @@ struct QueueRef {
 impl Queue {
     /// Creates a new, empty `Queue`.
     pub fn new(keep_count: usize) -> Queue {
-        Queue(Arc::new(QueueRef {
-            queue: RwLock::new(VecDeque::new()),
+        Queue {
+            queue: VecDeque::new(),
+            head: 0,
+
             keep_count,
-            head: AtomicUsize::new(0),
-        }))
+        }
     }
 
     /// Adds a new source to the back queue.
-    ///
-    /// Write-locks the queue.
-    pub async fn push(&self, source: Source) {
-        self.0.queue.write().await.push_back(source)
+    pub fn push(&mut self, source: Source) {
+        self.queue.push_back(source);
     }
 
     /// Advances the queue, returning the [`Source`] that was pushed into the
     /// graveyard.
-    ///
-    /// Write-locks the queue.
-    pub async fn next(&self) -> Option<Source> {
-        // this write lock ensures that we are the only thread with mutable
-        // access, and any operations to the head are stable
-        let mut queue = self.0.queue.write().await;
+    pub fn next(&mut self) -> Option<&Source> {
+        if self.head >= self.queue.len() {
+            return None;
+        }
 
-        let head = self.0.head.load(Ordering::Acquire);
-
-        let source = match queue.get(head) {
-            Some(source) => source.clone(),
-            None => return None,
-        };
-
-        if head >= self.0.keep_count {
+        if self.head >= self.keep_count {
             // remove the last song in the graveyard, effectively moving the
             // queue relative to the head
-            queue.pop_front();
+            self.queue.pop_front();
         } else {
             // move the head relative to the queue
-            self.0.head.store(head + 1, Ordering::Release);
+            self.head += 1;
         }
 
         // return source
-        Some(source)
+        Some(&self.queue[self.head - 1])
     }
 
     /// Backs up the queue, returning the [`Source`] now pulled out of the
     /// graveyard.
-    ///
-    /// Write-locks the queue.
-    pub async fn prev(&self) -> Option<Source> {
-        // this write lock ensures that we are the only thread with mutable
-        // access, and any operations to the head are stable
-        let queue = self.0.queue.write().await;
-
-        let head = self.0.head.load(Ordering::Acquire);
-        
-        if head > 0 {
+    pub async fn prev(&mut self) -> Option<&Source> {
+        if self.head > 0 {
             // move the head relative to the queue
-            self.0.head.store(head - 1, Ordering::Release);
+            self.head -= 1;
 
             // head <= queue.len()
-            Some(queue[head - 1].clone())
+            Some(&self.queue[self.head])
         } else {
             None
         }
@@ -130,7 +107,7 @@ impl Source {
     /// Creates a source from a url passed to `youtube-dl`.
     pub async fn ytdl(url: &str) -> Result<Source, Error> {
         // create process
-        let mut ytdl = Command::new("ytdl")
+        let mut ytdl = Command::new("youtube-dl")
             .args(&["-j", url])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -246,6 +223,7 @@ impl Source {
 }
 
 /// An error for reading sources.
+#[derive(Debug)]
 pub enum Error {
     /// Resulting JSON failed to decode.
     Json(serde_json::Error),

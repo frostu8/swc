@@ -9,7 +9,7 @@ pub use manager::Manager;
 
 use conn::{payload::Speaking, Connection, Event, RtpPacket, RtpSocket, Session};
 use audio::Source as AudioSource;
-use queue::Source;
+use queue::{Source, Queue};
 use crate::constants::TIMESTEP_LENGTH;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -27,8 +27,9 @@ use twilight_model::{
 #[derive(Clone)]
 pub struct Player {
     guild_id: Id<GuildMarker>,
+
     gateway_tx: UnboundedSender<GatewayEvent>,
-    chsrc_tx: UnboundedSender<Source>,
+    commands_tx: UnboundedSender<Command>,
 }
 
 impl Player {
@@ -41,16 +42,16 @@ impl Player {
         let guild_id = guild_id.into();
 
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
-        let (chsrc_tx, chsrc_rx) = mpsc::unbounded_channel();
+        let (commands_tx, commands_rx) = mpsc::unbounded_channel();
 
         // spawn player task
-        tokio::spawn(run(guild_id, user_id, gateway_rx, chsrc_rx));
+        tokio::spawn(run(guild_id, user_id, gateway_rx, commands_rx));
 
         // create Player
         Player {
-            gateway_tx,
             guild_id,
-            chsrc_tx,
+            gateway_tx,
+            commands_tx,
         }
     }
 
@@ -62,6 +63,13 @@ impl Player {
     /// Check if the player is closed.
     pub fn is_closed(&self) -> bool {
         self.gateway_tx.is_closed()
+    }
+
+    /// Pushes a new source to the end of the queue.
+    pub fn push(&self, source: Source) -> Result<(), Error> {
+        self.commands_tx
+            .send(Command::Push(source))
+            .map_err(|_| Error)
     }
 
     /// Updates the player's state with a [`VoiceStateUpdate`] event.
@@ -88,6 +96,10 @@ impl Player {
 #[derive(Clone, Copy, Debug)]
 pub struct Error;
 
+enum Command {
+    Push(Source),
+}
+
 #[derive(Debug)]
 enum GatewayEvent {
     VoiceStateUpdate(Box<VoiceStateUpdate>),
@@ -98,7 +110,7 @@ async fn run(
     guild_id: Id<GuildMarker>,
     user_id: Id<UserMarker>,
     mut gateway: UnboundedReceiver<GatewayEvent>,
-    mut chsrc: UnboundedReceiver<Source>,
+    mut commands: UnboundedReceiver<Command>,
 ) {
     // begin initialization: wait for events
     let timeout = Instant::now() + Duration::from_millis(5000);
@@ -164,10 +176,8 @@ async fn run(
         }
     };
 
-    let source = AudioSource::new("https://youtu.be/IAkn-4qoK_Y")
-        .await
-        .unwrap();
-    let mut stream = RtpStreamer::new(source);
+    let mut queue = Queue::new(5);
+    let mut stream: Option<RtpStreamer> = None;
 
     conn.send(Speaking {
         speaking: 1,
@@ -238,11 +248,37 @@ async fn run(
                     }
                 }
             }
+            // commands
+            Some(command) = commands.recv() => {
+                match command {
+                    Command::Push(source) => {
+                        queue.push(source);
+                    }
+                }
+
+                if stream.is_none() {
+                    // try to pull source off of queue
+                    match change_source(&mut stream, queue.next()).await {
+                        Ok(()) => (),
+                        Err(err) => {
+                            error!("source: {}", err);
+                            break;
+                        }
+                    }
+                }
+            }
             // streaming audio
-            result = stream.stream(&mut rtp) => {
+            result = stream_optional(&mut stream, &mut rtp) => {
                 match result {
                     Ok(()) => {
-                        warn!("audio ended");
+                        // chsrc
+                        match change_source(&mut stream, queue.next()).await {
+                            Ok(()) => (),
+                            Err(err) => {
+                                error!("source: {}", err);
+                                break;
+                            }
+                        }
                     }
                     Err(err) => {
                         error!("audio: {}", err);
@@ -254,7 +290,7 @@ async fn run(
     }
 
     // kill source gracefully
-    let _ = stream.into_inner().kill().await;
+    let _ = kill_optional(&mut stream).await;
 }
 
 /// Audio packet streamer.
@@ -327,10 +363,53 @@ impl RtpStreamer {
     }
 }
 
-async fn sleep_until_optional(deadline: Option<Instant>) {
-    if let Some(deadline) = deadline {
-        tokio::time::sleep_until(deadline).await;
-    } else {
-        std::future::pending::<()>().await;
+/// Changes the source of the [`RtpStreamer`].
+///
+/// A `source` of `None` unsets the source.
+async fn change_source(
+    stream: &mut Option<RtpStreamer>,
+    source: Option<&Source>,
+) -> Result<(), anyhow::Error> {
+    // kill
+    let _ = kill_optional(stream).await;
+
+    // TODO: generate silence
+    // we might add a RtpStreamer::end() function to signal the end
+    // of the source and then wait for that to be over to push the
+    // next audio source on
+
+    // update source
+    match source {
+        Some(source) => {
+            let source = source.to_audio().await?;
+
+            *stream = Some(RtpStreamer::new(source));
+
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Streams the inner audio over the [`RtpSocket`].
+///
+/// This is intended to be cancelled.
+async fn stream_optional(
+    stream: &mut Option<RtpStreamer>,
+    rtp: &mut RtpSocket,
+) -> Result<(), anyhow::Error> {
+    match stream {
+        Some(stream) => stream.stream(rtp).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Kills the [`RtpStreamer`] if it is `Some`.
+async fn kill_optional(
+    stream: &mut Option<RtpStreamer>,
+) -> Result<(), audio::Error> {
+    match stream.take() {
+        Some(stream) => stream.into_inner().kill().await,
+        None => std::future::ready(Ok(())).await,
     }
 }

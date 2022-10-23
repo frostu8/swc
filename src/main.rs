@@ -4,6 +4,7 @@ use std::{env, sync::Arc};
 use twilight_gateway::{Cluster, Intents};
 
 use swc::player::Manager;
+use swc::player::queue::Source;
 use twilight_model::gateway::event::Event;
 use twilight_model::id::Id;
 
@@ -35,11 +36,15 @@ async fn main() -> anyhow::Result<()> {
 
                 // initialize manager
                 manager = Some(Manager::new(Arc::clone(&cluster), user_id));
-                manager
+
+                let player = manager
                     .as_ref()
                     .unwrap()
                     .join(Id::new(683483117473759249), Id::new(683483410962055270))
                     .await;
+
+                player.push(Source::ytdl("https://youtu.be/gDPN_Vpmw2c").await.unwrap()).unwrap();
+                player.push(Source::ytdl("https://youtu.be/AEtEBleNwCQ").await.unwrap()).unwrap();
             }
             Event::VoiceStateUpdate(ev) => {
                 if let Some(manager) = &manager {
