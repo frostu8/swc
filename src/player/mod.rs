@@ -12,6 +12,8 @@ use audio::Source as AudioSource;
 use queue::{Source, Queue};
 use crate::constants::TIMESTEP_LENGTH;
 
+use anyhow::{bail, Context as _};
+
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{sleep_until, timeout_at, Duration, Instant};
 
@@ -109,9 +111,21 @@ enum GatewayEvent {
 async fn run(
     guild_id: Id<GuildMarker>,
     user_id: Id<UserMarker>,
+    gateway: UnboundedReceiver<GatewayEvent>,
+    commands: UnboundedReceiver<Command>,
+) {
+    match run_inner(guild_id, user_id, gateway, commands).await {
+        Ok(()) => (),
+        Err(err) => error!("{:?}", err),
+    }
+}
+
+async fn run_inner(
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
     mut gateway: UnboundedReceiver<GatewayEvent>,
     mut commands: UnboundedReceiver<Command>,
-) {
+) -> Result<(), anyhow::Error> {
     // begin initialization: wait for events
     let timeout = Instant::now() + Duration::from_millis(5000);
     let mut vstu: Option<Box<VoiceStateUpdate>> = None;
@@ -136,14 +150,8 @@ async fn run(
                     break;
                 }
             }
-            Ok(None) => {
-                error!("gateway closed!");
-                return;
-            }
-            Err(_) => {
-                error!("player initialization timed out after 5000ms!");
-                return;
-            }
+            Ok(None) => bail!("gateway closed unexpectedly"),
+            Err(_) => bail!("player initialization timed out after 5000ms!"),
         }
     }
 
@@ -157,23 +165,15 @@ async fn run(
             session_id: vstu.0.session_id,
         }
     } else {
-        error!("got no response for voice state update");
-        return;
+        bail!("got no response for voice state update");
     };
 
     debug!("got new session; establishing ws connection...");
 
     let timeout = Instant::now() + Duration::from_millis(5000);
     let (mut conn, mut rtp) = match timeout_at(timeout, Connection::connect(session)).await {
-        Ok(Ok(conn)) => conn,
-        Ok(Err(err)) => {
-            error!("connect: {}", err);
-            return;
-        }
-        Err(_) => {
-            error!("player initialization timed out after 5000ms!");
-            return;
-        }
+        Ok(conn) => conn.context("failed to connect to voice websocket")?,
+        Err(_) => bail!("player initialization timed out after 5000ms!"),
     };
 
     let mut queue = Queue::new(5);
@@ -207,12 +207,8 @@ async fn run(
                         debug!("disconnected");
                         break;
                     }
-                    Some(Err(err)) => {
-                        // print error and continue
-                        error!("voice: {}", err);
-                        break;
-                    }
-                    None => break
+                    Some(Err(err)) => return Err(err).context("voice websocket closed"),
+                    None => break,
                 }
             }
             // main gateway event
@@ -228,24 +224,14 @@ async fn run(
                         };
                         let timeout = Instant::now() + Duration::from_millis(5000);
                         (conn, rtp) = match timeout_at(timeout, Connection::connect(session)).await {
-                            Ok(Ok(conn)) => conn,
-                            Ok(Err(err)) => {
-                                error!("connect: {}", err);
-                                break;
-                            }
-                            Err(_) => {
-                                error!("player reconnection timed out after 5000ms!");
-                                break;
-                            }
+                            Ok(conn) => conn.context("failed to connect to voice websocket")?,
+                            Err(_) => bail!("player reconnection timed out after 5000ms!"),
                         };
                     }
                     Some(GatewayEvent::VoiceStateUpdate(_vstu)) => {
                         // TODO: handle state update
                     }
-                    None => {
-                        error!("gateway closed unexpectedly");
-                        break;
-                    }
+                    None => bail!("gateway closed unexpectedly"),
                 }
             }
             // commands
@@ -258,39 +244,25 @@ async fn run(
 
                 if stream.is_none() {
                     // try to pull source off of queue
-                    match change_source(&mut stream, queue.next()).await {
-                        Ok(()) => (),
-                        Err(err) => {
-                            error!("source: {}", err);
-                            break;
-                        }
-                    }
+                    change_source(&mut stream, queue.next()).await
+                        .context("failed to start audio stream")?;
                 }
             }
             // streaming audio
             result = stream_optional(&mut stream, &mut rtp) => {
-                match result {
-                    Ok(()) => {
-                        // chsrc
-                        match change_source(&mut stream, queue.next()).await {
-                            Ok(()) => (),
-                            Err(err) => {
-                                error!("source: {}", err);
-                                break;
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        error!("audio: {}", err);
-                        break;
-                    }
-                }
+                result.context("failed to stream audio")?;
+
+                // advance queue
+                change_source(&mut stream, queue.next()).await
+                    .context("failed to start audio stream")?;
             }
         }
     }
 
     // kill source gracefully
     let _ = kill_optional(&mut stream).await;
+
+    Ok(())
 }
 
 /// Audio packet streamer.

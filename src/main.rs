@@ -43,8 +43,7 @@ async fn main() -> anyhow::Result<()> {
                     .join(Id::new(683483117473759249), Id::new(683483410962055270))
                     .await;
 
-                player.push(Source::ytdl("https://youtu.be/gDPN_Vpmw2c").await.unwrap()).unwrap();
-                player.push(Source::ytdl("https://youtu.be/AEtEBleNwCQ").await.unwrap()).unwrap();
+                player.push(Source::ytdl("https://youtu.be/vqzMdWcwSQs").await.unwrap()).unwrap();
             }
             Event::VoiceStateUpdate(ev) => {
                 if let Some(manager) = &manager {
