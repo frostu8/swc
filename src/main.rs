@@ -5,7 +5,9 @@ use twilight_gateway::{Cluster, Intents};
 
 use swc::player::Manager;
 use swc::player::queue::Source;
+use swc::commands::{Context, handle};
 use twilight_model::gateway::event::Event;
+use twilight_model::application::interaction::InteractionData;
 use twilight_model::id::Id;
 
 #[tokio::main]
@@ -43,7 +45,17 @@ async fn main() -> anyhow::Result<()> {
                     .join(Id::new(683483117473759249), Id::new(683483410962055270))
                     .await;
 
-                player.push(Source::ytdl("https://youtu.be/vqzMdWcwSQs").await.unwrap()).unwrap();
+                //player.push(Source::ytdl("https://youtu.be/vqzMdWcwSQs").await.unwrap()).unwrap();
+            }
+            Event::InteractionCreate(mut interaction) => {
+                let context = Context::new(manager.clone().unwrap());
+
+                match interaction.data.take() {
+                    Some(InteractionData::ApplicationCommand(data)) => {
+                        tokio::spawn(handle(context, interaction.0, data));
+                    }
+                    _ => ()
+                }
             }
             Event::VoiceStateUpdate(ev) => {
                 if let Some(manager) = &manager {

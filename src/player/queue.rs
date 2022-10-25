@@ -5,6 +5,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use std::collections::VecDeque;
 use std::process::Stdio;
+use std::fmt::{self, Display, Formatter};
 
 use twilight_model::channel::embed::{Embed, EmbedAuthor, EmbedThumbnail};
 
@@ -231,6 +232,26 @@ pub enum Error {
     Io(std::io::Error),
     /// Error from `youtube-dl`.
     Ytdl(ytdl::Error),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Error::Json(err) => Display::fmt(err, f),
+            Error::Io(err) => Display::fmt(err, f),
+            Error::Ytdl(err) => Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Json(err) => Some(err),
+            Error::Io(err) => Some(err),
+            Error::Ytdl(err) => Some(err),
+        }
+    }
 }
 
 #[derive(Deserialize)]
