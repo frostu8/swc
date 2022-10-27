@@ -9,7 +9,7 @@ mod manager;
 pub use manager::Manager;
 
 use conn::{payload::Speaking, Connection, RtpPacket, RtpSocket, Session};
-use audio::{Source, Track, Queue};
+use audio::{Source, Queue};
 use commands::{Command, CommandType};
 use constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX};
 
@@ -56,7 +56,25 @@ impl Player {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
 
         // spawn player task
-        tokio::spawn(run(http_client, user_id, application_id, guild_id, gateway_rx, commands_rx));
+        tokio::spawn(async move {
+            let fut = PlayerState::new(
+                http_client,
+                application_id,
+                user_id,
+                guild_id,
+                gateway_rx,
+                commands_rx
+            );
+
+            match tokio::time::timeout(Duration::from_millis(5000), fut).await {
+                Ok(Ok(player)) => match player.run().await {
+                    Ok(()) => (),
+                    Err(err) => error!("{:?}", err),
+                },
+                Ok(Err(err)) => error!("{:?}", err),
+                Err(_) => error!("player initialization timed out after 5000ms!"),
+            }
+        });
 
         // create Player
         Player {
@@ -110,213 +128,275 @@ impl Player {
     }
 }
 
+struct PlayerState {
+    http_client: Arc<Client>,
+    application_id: Id<ApplicationMarker>,
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
+
+    gateway: UnboundedReceiver<GatewayEvent>,
+    commands: UnboundedReceiver<Command>,
+
+    ws: Connection,
+    rtp: RtpSocket,
+
+    queue: Queue,
+    stream: Option<RtpStreamer>,
+}
+
 #[derive(Debug)]
 enum GatewayEvent {
     VoiceStateUpdate(Box<VoiceStateUpdate>),
     VoiceServerUpdate(VoiceServerUpdate),
 }
 
-async fn run(
-    http_client: Arc<Client>,
-    user_id: Id<UserMarker>,
-    application_id: Id<ApplicationMarker>,
-    guild_id: Id<GuildMarker>,
-    gateway: UnboundedReceiver<GatewayEvent>,
-    commands: UnboundedReceiver<Command>,
-) {
-    match run_inner(http_client, user_id, application_id, guild_id, gateway, commands).await {
-        Ok(()) => (),
-        Err(err) => error!("{:?}", err),
-    }
-}
+impl PlayerState {
+    /// Creates a new `PlayerState`.
+    pub async fn new(
+        http_client: Arc<Client>,
+        application_id: Id<ApplicationMarker>,
+        user_id: Id<UserMarker>,
+        guild_id: Id<GuildMarker>,
+        mut gateway: UnboundedReceiver<GatewayEvent>,
+        commands: UnboundedReceiver<Command>,
+    ) -> Result<PlayerState, Error> {
+        // begin initialization: wait for events
+        let mut vstu: Option<Box<VoiceStateUpdate>> = None;
+        let mut vseu: Option<VoiceServerUpdate> = None;
 
-async fn run_inner(
-    http_client: Arc<Client>,
-    user_id: Id<UserMarker>,
-    application_id: Id<ApplicationMarker>,
-    guild_id: Id<GuildMarker>,
-    mut gateway: UnboundedReceiver<GatewayEvent>,
-    mut commands: UnboundedReceiver<Command>,
-) -> Result<(), anyhow::Error> {
-    // begin initialization: wait for events
-    let timeout = Instant::now() + Duration::from_millis(5000);
-    let mut vstu: Option<Box<VoiceStateUpdate>> = None;
-    let mut vseu: Option<VoiceServerUpdate> = None;
+        debug!("waiting for VoiceStateUpdate and VoiceServerUpdate...");
 
-    debug!("waiting for VoiceStateUpdate and VoiceServerUpdate...");
+        while let Some(ev) = gateway.recv().await {
+            match ev {
+                GatewayEvent::VoiceStateUpdate(ev) if ev.0.user_id == user_id => {
+                    vstu = Some(ev);
+                },
+                GatewayEvent::VoiceServerUpdate(ev) => {
+                    vseu = Some(ev);
+                },
+                _ => ()
+            };
 
-    loop {
-        match timeout_at(timeout, gateway.recv()).await {
-            Ok(Some(ev)) => {
-                match ev {
-                    GatewayEvent::VoiceStateUpdate(ev) if ev.0.user_id == user_id => {
-                        vstu = Some(ev);
-                    },
-                    GatewayEvent::VoiceServerUpdate(ev) => {
-                        vseu = Some(ev);
-                    },
-                    _ => ()
-                };
-
-                if vstu.is_some() && vseu.is_some() {
-                    break;
-                }
+            if vstu.is_some() && vseu.is_some() {
+                break;
             }
-            Ok(None) => bail!("gateway closed unexpectedly"),
-            Err(_) => bail!("player initialization timed out after 5000ms!"),
         }
-    }
 
-    // establish session
-    let session = if let (Some(vseu), Some(vstu)) = (vseu, vstu) {
-        Session {
-            guild_id,
+        // establish session
+        let session = if let (Some(vseu), Some(vstu)) = (vseu, vstu) {
+            Session {
+                guild_id,
+                user_id,
+                endpoint: vseu.endpoint.unwrap(),
+                token: vseu.token,
+                session_id: vstu.0.session_id,
+            }
+        } else {
+            bail!("got no response for voice state update");
+        };
+
+        debug!("got new session; establishing ws connection...");
+
+        let (mut ws, rtp) = Connection::connect(session)
+            .await
+            .context("failed to connect to voice websocket")?;
+
+        ws.send(Speaking {
+            speaking: 1,
+            ssrc: rtp.ssrc(),
+            delay: Some(0),
+        })
+        .await
+        .unwrap();
+
+        Ok(PlayerState {
+            http_client,
+            application_id,
             user_id,
-            endpoint: vseu.endpoint.unwrap(),
-            token: vseu.token,
-            session_id: vstu.0.session_id,
-        }
-    } else {
-        bail!("got no response for voice state update");
-    };
+            guild_id,
 
-    debug!("got new session; establishing ws connection...");
+            gateway,
+            commands,
 
-    let timeout = Instant::now() + Duration::from_millis(5000);
-    let (mut conn, mut rtp) = match timeout_at(timeout, Connection::connect(session)).await {
-        Ok(conn) => conn.context("failed to connect to voice websocket")?,
-        Err(_) => bail!("player initialization timed out after 5000ms!"),
-    };
+            ws,
+            rtp,
 
-    let mut queue = Queue::new(5);
-    let mut stream: Option<RtpStreamer> = None;
+            queue: Queue::new(5),
+            stream: None,
+        })
+    }
 
-    conn.send(Speaking {
-        speaking: 1,
-        ssrc: rtp.ssrc(),
-        delay: Some(0),
-    })
-    .await
-    .unwrap();
+    /// Begins handling requests and audio on this thread.
+    ///
+    /// This should be called as a parameter to [`tokio::spawn`].
+    pub async fn run(mut self) -> Result<(), Error> {
+        loop {
+            tokio::select! {
+                biased;
 
-    let interaction_client = http_client.interaction(application_id);
-
-    loop {
-        tokio::select! {
-            biased;
-
-            // voice websocket event
-            ev = conn.recv() => {
-                match ev {
-                    Some(Ok(ev)) => {
-                        // discard event
-                        debug!("voice ev: {:?}", ev);
-                    }
-                    Some(Err(err)) if err.disconnected() => {
-                        // normal disconnect event
-                        debug!("disconnected");
-                        break;
-                    }
-                    Some(Err(err)) => return Err(err).context("voice websocket closed"),
-                    None => break,
-                }
-            }
-            // main gateway event
-            ev = gateway.recv() => {
-                match ev {
-                    Some(GatewayEvent::VoiceServerUpdate(vseu)) => {
-                        // server update; reconnect
-                        let session = Session {
-                            guild_id, user_id,
-                            endpoint: vseu.endpoint.unwrap(),
-                            token: vseu.token,
-                            session_id: conn.session().session_id.clone(),
-                        };
-                        let timeout = Instant::now() + Duration::from_millis(5000);
-                        (conn, rtp) = match timeout_at(timeout, Connection::connect(session)).await {
-                            Ok(conn) => conn.context("failed to connect to voice websocket")?,
-                            Err(_) => bail!("player reconnection timed out after 5000ms!"),
-                        };
-                    }
-                    Some(GatewayEvent::VoiceStateUpdate(_vstu)) => {
-                        // TODO: handle state update
-                    }
-                    None => bail!("gateway closed unexpectedly"),
-                }
-            }
-            // commands
-            Some(command) = commands.recv() => {
-                match command.kind {
-                    CommandType::Play(track) => {
-                        let embed = Embed {
-                            description: Some("added song to queue".into()),
-                            ..track.to_embed()
-                        };
-
-                        // add track to queue
-                        queue.push(track);
-
-                        let fut = interaction_client
-                            .create_response(
-                                command.interaction.id,
-                                &command.interaction.token,
-                                &InteractionResponse {
-                                    kind: InteractionResponseType::ChannelMessageWithSource,
-                                    data: Some(InteractionResponseData {
-                                        embeds: Some(vec![embed]),
-                                        ..Default::default()
-                                    }),
-                                },
-                            )
-                            .exec();
-
-                        tokio::spawn(fut);
-                    }
-                    CommandType::Skip => {
-                        // try to pull source off of queue
-                        change_source(&mut stream, queue.next()).await
-                            .context("failed to start audio stream")?;
-
-                        let fut = interaction_client
-                            .create_response(
-                                command.interaction.id,
-                                &command.interaction.token,
-                                &InteractionResponse {
-                                    kind: InteractionResponseType::ChannelMessageWithSource,
-                                    data: Some(InteractionResponseData {
-                                        // TODO: embed magic
-                                        content: Some("skipped song".into()),
-                                        ..Default::default()
-                                    }),
-                                },
-                            )
-                            .exec();
-
-                        tokio::spawn(fut);
+                // voice websocket event
+                ev = self.ws.recv() => {
+                    match ev {
+                        Some(Ok(ev)) => {
+                            // discard event
+                            debug!("voice ev: {:?}", ev);
+                        }
+                        Some(Err(err)) if err.disconnected() => {
+                            // normal disconnect event
+                            debug!("disconnected");
+                            break;
+                        }
+                        Some(Err(err)) => return Err(err).context("voice websocket closed"),
+                        None => break,
                     }
                 }
+                // main gateway event
+                ev = self.gateway.recv() => {
+                    match ev {
+                        Some(GatewayEvent::VoiceServerUpdate(vseu)) => {
+                            // server update; reconnect
+                            self.voice_server_update(vseu).await?;
+                        }
+                        Some(GatewayEvent::VoiceStateUpdate(_vstu)) => {
+                            // TODO: handle state update
+                        }
+                        None => bail!("gateway closed unexpectedly"),
+                    }
+                }
+                // commands
+                Some(command) = self.commands.recv() => {
+                    self.command(command).await?;
+                }
+                // streaming audio
+                result = stream_to_rtp(&mut self.stream, &mut self.rtp) => {
+                    result.context("failed to stream audio")?;
 
-                if stream.is_none() {
-                    // try to pull source off of queue
-                    change_source(&mut stream, queue.next()).await
+                    // advance queue
+                    self.next()
+                        .await
                         .context("failed to start audio stream")?;
                 }
             }
-            // streaming audio
-            result = stream_optional(&mut stream, &mut rtp) => {
-                result.context("failed to stream audio")?;
+        }
 
-                // advance queue
-                change_source(&mut stream, queue.next()).await
-                    .context("failed to start audio stream")?;
+        // kill source gracefully
+        let _ = self.kill_stream().await;
+
+        Ok(())
+    }
+
+    async fn command(&mut self, command: Command) -> Result<(), Error> {
+        match command.kind {
+            CommandType::Play(track) => {
+                let embed = Embed {
+                    description: Some("added song to queue".into()),
+                    ..track.to_embed()
+                };
+
+                // add track to queue
+                self.queue.push(track);
+
+                let fut = self
+                    .http_client
+                    .interaction(self.application_id)
+                    .create_response(
+                        command.interaction.id,
+                        &command.interaction.token,
+                        &InteractionResponse {
+                            kind: InteractionResponseType::ChannelMessageWithSource,
+                            data: Some(InteractionResponseData {
+                                embeds: Some(vec![embed]),
+                                ..Default::default()
+                            }),
+                        },
+                    )
+                    .exec();
+
+                tokio::spawn(fut);
+
+                if self.stream.is_none() {
+                    // try to pull source off of queue
+                    self.next()
+                        .await
+                        .context("failed to start audio stream")?;
+                }
             }
+            CommandType::Skip => {
+                // try to pull source off of queue
+                self.next()
+                    .await
+                    .context("failed to start audio stream")?;
+
+                let fut = self
+                    .http_client
+                    .interaction(self.application_id)
+                    .create_response(
+                        command.interaction.id,
+                        &command.interaction.token,
+                        &InteractionResponse {
+                            kind: InteractionResponseType::ChannelMessageWithSource,
+                            data: Some(InteractionResponseData {
+                                // TODO: embed magic
+                                content: Some("skipped song".into()),
+                                ..Default::default()
+                            }),
+                        },
+                    )
+                    .exec();
+
+                tokio::spawn(fut);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn next(&mut self) -> Result<(), Error> {
+        // kill
+        self.kill_stream().await?;
+
+        // TODO: generate silence
+        // we might add a RtpStreamer::end() function to signal the end
+        // of the source and then wait for that to be over to push the
+        // next audio source on
+
+        // update source
+        match self.queue.next() {
+            Some(track) => {
+                let source = track.open().await?;
+
+                self.stream = Some(RtpStreamer::new(source));
+
+                Ok(())
+            }
+            None => Ok(()),
         }
     }
 
-    // kill source gracefully
-    let _ = kill_optional(&mut stream).await;
+    async fn kill_stream(&mut self) -> Result<(), Error> {
+        match self.stream.take() {
+            Some(stream) => stream.into_inner().kill().await.map_err(Into::into),
+            None => std::future::ready(Ok(())).await,
+        }
+    }
 
-    Ok(())
+    async fn voice_server_update(&mut self, vseu: VoiceServerUpdate) -> Result<(), Error> {
+        let session = Session {
+            guild_id: self.guild_id,
+            user_id: self.user_id,
+            endpoint: vseu.endpoint.unwrap(),
+            token: vseu.token,
+            session_id: self.ws.session().session_id.clone(),
+        };
+
+        let timeout = Instant::now() + Duration::from_millis(5000);
+        (self.ws, self.rtp) = match timeout_at(timeout, Connection::connect(session)).await {
+            Ok(conn) => conn.context("failed to connect to voice websocket")?,
+            Err(_) => bail!("player reconnection timed out after 5000ms!"),
+        };
+
+        Ok(())
+    }
 }
 
 /// Audio packet streamer.
@@ -389,53 +469,15 @@ impl RtpStreamer {
     }
 }
 
-/// Changes the source of the [`RtpStreamer`].
-///
-/// A `source` of `None` unsets the source.
-async fn change_source(
-    stream: &mut Option<RtpStreamer>,
-    track: Option<&Track>,
-) -> Result<(), anyhow::Error> {
-    // kill
-    let _ = kill_optional(stream).await;
-
-    // TODO: generate silence
-    // we might add a RtpStreamer::end() function to signal the end
-    // of the source and then wait for that to be over to push the
-    // next audio source on
-
-    // update source
-    match track {
-        Some(track) => {
-            let source = track.open().await?;
-
-            *stream = Some(RtpStreamer::new(source));
-
-            Ok(())
-        }
-        None => Ok(()),
-    }
-}
-
 /// Streams the inner audio over the [`RtpSocket`].
 ///
 /// This is intended to be cancelled.
-async fn stream_optional(
+async fn stream_to_rtp(
     stream: &mut Option<RtpStreamer>,
     rtp: &mut RtpSocket,
 ) -> Result<(), anyhow::Error> {
     match stream {
         Some(stream) => stream.stream(rtp).await,
         None => std::future::pending().await,
-    }
-}
-
-/// Kills the [`RtpStreamer`] if it is `Some`.
-async fn kill_optional(
-    stream: &mut Option<RtpStreamer>,
-) -> Result<(), audio::Error> {
-    match stream.take() {
-        Some(stream) => stream.into_inner().kill().await,
-        None => std::future::ready(Ok(())).await,
     }
 }
