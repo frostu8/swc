@@ -8,10 +8,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use twilight_gateway::Cluster;
+use twilight_http::Client;
 use twilight_model::gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate};
 use twilight_model::gateway::payload::outgoing::UpdateVoiceState;
 use twilight_model::id::{
-    marker::{ChannelMarker, GuildMarker, UserMarker},
+    marker::{ChannelMarker, GuildMarker, UserMarker, ApplicationMarker},
     Id,
 };
 
@@ -20,8 +21,10 @@ use twilight_model::id::{
 /// This should be made for each shard or cluster.
 #[derive(Clone)]
 pub struct Manager {
+    user_id: Id<UserMarker>,
+    application_id: Id<ApplicationMarker>,
     mref: Arc<ManagerRef>,
-    me: Id<UserMarker>,
+    http_client: Arc<Client>,
     gateway: Arc<Cluster>,
 }
 
@@ -31,12 +34,19 @@ struct ManagerRef {
 
 impl Manager {
     /// Creates a new manager.
-    pub fn new(gateway: Arc<Cluster>, me: Id<UserMarker>) -> Manager {
+    pub fn new(
+        user_id: Id<UserMarker>,
+        application_id: Id<ApplicationMarker>,
+        http_client: Arc<Client>,
+        gateway: Arc<Cluster>,
+    ) -> Manager {
         Manager {
+            user_id,
+            application_id,
             mref: Arc::new(ManagerRef {
                 players: RwLock::new(HashMap::new()),
             }),
-            me,
+            http_client,
             gateway,
         }
     }
@@ -105,7 +115,7 @@ impl Manager {
     ///
     /// Returns `None` if it does not exist or the player is closed.
     async fn new_player(&self, guild_id: Id<GuildMarker>) -> Player {
-        let player = Player::new(self.me, guild_id).await;
+        let player = Player::new(self.http_client.clone(), self.user_id, self.application_id, guild_id).await;
 
         self.mref
             .players

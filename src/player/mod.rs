@@ -1,29 +1,34 @@
 //! Provides the audio [`Player`] and the player manager [`Manager`].
 
 pub mod audio;
+pub mod commands;
 mod conn;
 mod manager;
-pub mod queue;
 
 pub use manager::Manager;
 
 use conn::{payload::Speaking, Connection, Event, RtpPacket, RtpSocket, Session};
-use audio::Source as AudioSource;
-use queue::{Source, Queue};
+use audio::{Source, Track, Queue};
+use commands::{Command, CommandType};
 use crate::constants::TIMESTEP_LENGTH;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context as _, Error};
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{sleep_until, timeout_at, Duration, Instant};
 
+use std::sync::Arc;
+
 use twilight_model::{
     gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
+    channel::embed::Embed,
+    http::interaction::{InteractionResponse, InteractionResponseType, InteractionResponseData},
     id::{
-        marker::{GuildMarker, UserMarker},
+        marker::{GuildMarker, UserMarker, ApplicationMarker},
         Id,
     },
 };
+use twilight_http::Client;
 
 /// A music player for a specific guild.
 #[derive(Clone)]
@@ -37,17 +42,20 @@ pub struct Player {
 impl Player {
     /// Creates a new player.
     pub async fn new(
+        http_client: Arc<Client>,
         user_id: impl Into<Id<UserMarker>>,
+        application_id: impl Into<Id<ApplicationMarker>>,
         guild_id: impl Into<Id<GuildMarker>>,
     ) -> Player {
         let user_id = user_id.into();
+        let application_id = application_id.into();
         let guild_id = guild_id.into();
 
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
 
         // spawn player task
-        tokio::spawn(run(guild_id, user_id, gateway_rx, commands_rx));
+        tokio::spawn(run(http_client, user_id, application_id, guild_id, gateway_rx, commands_rx));
 
         // create Player
         Player {
@@ -67,39 +75,38 @@ impl Player {
         self.gateway_tx.is_closed()
     }
 
-    /// Pushes a new source to the end of the queue.
-    pub fn push(&self, source: Source) -> Result<(), Error> {
+    /// Sends a command to the player.
+    ///
+    /// # Panics
+    /// Panics if an error was returned last call and the `Player` is used
+    /// again.
+    pub fn command(&self, command: Command) -> Result<(), Error> {
         self.commands_tx
-            .send(Command::Push(source))
-            .map_err(|_| Error)
+            .send(command)
+            .map_err(|_| anyhow::anyhow!("player closed"))
     }
 
     /// Updates the player's state with a [`VoiceStateUpdate`] event.
+    ///
+    /// # Panics
+    /// Panics if an error was returned last call and the `Player` is used
+    /// again.
     pub fn voice_state_update(&self, ev: Box<VoiceStateUpdate>) -> Result<(), Error> {
         self.gateway_tx
             .send(GatewayEvent::VoiceStateUpdate(ev))
-            .map_err(|_| Error)
+            .map_err(|_| anyhow::anyhow!("player closed"))
     }
 
     /// Updates the player's state with a [`VoiceServerUpdate`] event.
+    ///
+    /// # Panics
+    /// Panics if an error was returned last call and the `Player` is used
+    /// again.
     pub fn voice_server_update(&self, ev: VoiceServerUpdate) -> Result<(), Error> {
         self.gateway_tx
             .send(GatewayEvent::VoiceServerUpdate(ev))
-            .map_err(|_| Error)
+            .map_err(|_| anyhow::anyhow!("player closed"))
     }
-}
-
-/// An error for operations with [`Player`].
-///
-/// A [`Player`] may stop at any time in response to an unrecoverable error.
-/// Things like being disconnected administratively by someone who has that
-/// power is an unrecoverable error, and so is Discord servers going entirely
-/// down.
-#[derive(Clone, Copy, Debug)]
-pub struct Error;
-
-enum Command {
-    Push(Source),
 }
 
 #[derive(Debug)]
@@ -109,20 +116,24 @@ enum GatewayEvent {
 }
 
 async fn run(
-    guild_id: Id<GuildMarker>,
+    http_client: Arc<Client>,
     user_id: Id<UserMarker>,
+    application_id: Id<ApplicationMarker>,
+    guild_id: Id<GuildMarker>,
     gateway: UnboundedReceiver<GatewayEvent>,
     commands: UnboundedReceiver<Command>,
 ) {
-    match run_inner(guild_id, user_id, gateway, commands).await {
+    match run_inner(http_client, user_id, application_id, guild_id, gateway, commands).await {
         Ok(()) => (),
         Err(err) => error!("{:?}", err),
     }
 }
 
 async fn run_inner(
-    guild_id: Id<GuildMarker>,
+    http_client: Arc<Client>,
     user_id: Id<UserMarker>,
+    application_id: Id<ApplicationMarker>,
+    guild_id: Id<GuildMarker>,
     mut gateway: UnboundedReceiver<GatewayEvent>,
     mut commands: UnboundedReceiver<Command>,
 ) -> Result<(), anyhow::Error> {
@@ -187,6 +198,8 @@ async fn run_inner(
     .await
     .unwrap();
 
+    let interaction_client = http_client.interaction(application_id);
+
     loop {
         tokio::select! {
             biased;
@@ -236,9 +249,31 @@ async fn run_inner(
             }
             // commands
             Some(command) = commands.recv() => {
-                match command {
-                    Command::Push(source) => {
-                        queue.push(source);
+                match command.kind {
+                    CommandType::Play(track) => {
+                        let embed = Embed {
+                            description: Some("added song to queue".into()),
+                            ..track.to_embed()
+                        };
+
+                        // add track to queue
+                        queue.push(track);
+
+                        let fut = interaction_client
+                            .create_response(
+                                command.interaction.id,
+                                &command.interaction.token,
+                                &InteractionResponse {
+                                    kind: InteractionResponseType::ChannelMessageWithSource,
+                                    data: Some(InteractionResponseData {
+                                        embeds: Some(vec![embed]),
+                                        ..Default::default()
+                                    }),
+                                },
+                            )
+                            .exec();
+
+                        tokio::spawn(fut);
                     }
                 }
 
@@ -272,7 +307,7 @@ async fn run_inner(
 /// 4x the actual speed of the audio is going to cause some buffer issues and
 /// also make you tonight's biggest loser.
 struct RtpStreamer {
-    source: AudioSource,
+    source: Source,
 
     packet: RtpPacket<[u8; crate::constants::VOICE_PACKET_MAX]>,
     next_packet: Instant,
@@ -281,7 +316,7 @@ struct RtpStreamer {
 
 impl RtpStreamer {
     /// Create a new `RtpStreamer`.
-    pub fn new(source: AudioSource) -> RtpStreamer {
+    pub fn new(source: Source) -> RtpStreamer {
         RtpStreamer {
             source,
             packet: RtpPacket::default(),
@@ -290,8 +325,8 @@ impl RtpStreamer {
         }
     }
 
-    /// Extracts the inner [`AudioSource`].
-    pub fn into_inner(self) -> AudioSource {
+    /// Extracts the inner [`Source`].
+    pub fn into_inner(self) -> Source {
         self.source
     }
 
@@ -340,7 +375,7 @@ impl RtpStreamer {
 /// A `source` of `None` unsets the source.
 async fn change_source(
     stream: &mut Option<RtpStreamer>,
-    source: Option<&Source>,
+    track: Option<&Track>,
 ) -> Result<(), anyhow::Error> {
     // kill
     let _ = kill_optional(stream).await;
@@ -351,9 +386,9 @@ async fn change_source(
     // next audio source on
 
     // update source
-    match source {
-        Some(source) => {
-            let source = source.to_audio().await?;
+    match track {
+        Some(track) => {
+            let source = track.open().await?;
 
             *stream = Some(RtpStreamer::new(source));
 
