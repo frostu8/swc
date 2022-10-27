@@ -28,6 +28,7 @@ pub enum GatewayEvent {
     Resume(Resume),
     Hello(Hello),
     Resumed,
+    ClientConnect(ClientConnect),
     ClientDisconnect(ClientDisconnect),
 }
 
@@ -44,6 +45,7 @@ pub enum OpCode {
     Resume = 7,
     Hello = 8,
     Resumed = 9,
+    ClientConnect = 12,
     ClientDisconnect = 13,
 }
 
@@ -61,6 +63,7 @@ impl GatewayEvent {
             GatewayEvent::Resume(_) => OpCode::Resume,
             GatewayEvent::Hello(_) => OpCode::Hello,
             GatewayEvent::Resumed => OpCode::Resumed,
+            GatewayEvent::ClientConnect(_) => OpCode::ClientConnect,
             GatewayEvent::ClientDisconnect(_) => OpCode::ClientDisconnect,
         }
     }
@@ -85,6 +88,7 @@ impl Serialize for GatewayEvent {
             GatewayEvent::Resume(ev) => event.serialize_field("d", ev)?,
             GatewayEvent::Hello(ev) => event.serialize_field("d", ev)?,
             GatewayEvent::Resumed => event.serialize_field("d", &None::<()>)?,
+            GatewayEvent::ClientConnect(ev) => event.serialize_field("d", ev)?,
             GatewayEvent::ClientDisconnect(ev) => event.serialize_field("d", ev)?,
         };
 
@@ -193,6 +197,7 @@ impl<'de> DeserializeSeed<'de> for GatewayEventDeserializer {
                     OpCode::Resume => self.get_d(map).map(GatewayEvent::Resume),
                     OpCode::Hello => self.get_d(map).map(GatewayEvent::Hello),
                     OpCode::Resumed => Ok(GatewayEvent::Resumed),
+                    OpCode::ClientConnect => self.get_d(map).map(GatewayEvent::ClientConnect),
                     OpCode::ClientDisconnect => self.get_d(map).map(GatewayEvent::ClientDisconnect),
                 }
             }
@@ -273,6 +278,14 @@ pub struct Resume {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Hello {
     pub heartbeat_interval: f32,
+}
+
+/// The `CLIENT_CONNECT` payload.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClientConnect {
+    pub audio_ssrc: u32,
+    pub user_id: Id<UserMarker>,
+    pub video_ssrc: u32,
 }
 
 /// The `CLIENT_DISCONNECT` payload.

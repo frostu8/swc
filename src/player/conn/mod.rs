@@ -9,8 +9,9 @@ pub use rtp::{Packet as RtpPacket, Socket as RtpSocket};
 
 use error::{ApiError, ProtocolError};
 use payload::{
-    ClientDisconnect, EncryptionMode, GatewayEvent, Heartbeat, Hello, Identify, Ready, Resume,
-    SelectProtocol, SelectProtocolData, SessionDescription, Speaking,
+    ClientDisconnect, ClientConnect, EncryptionMode, GatewayEvent, Heartbeat,
+    Hello, Identify, Ready, Resume, SelectProtocol, SelectProtocolData,
+    SessionDescription, Speaking,
 };
 use rtp::Encryptor;
 
@@ -72,6 +73,9 @@ impl Connection {
                         }
                         Some(Ok(GatewayEvent::Speaking(ev))) => {
                             return Some(Ok(Event::Speaking(ev)));
+                        }
+                        Some(Ok(GatewayEvent::ClientConnect(ev))) => {
+                            return Some(Ok(Event::ClientConnect(ev)));
                         }
                         Some(Ok(GatewayEvent::ClientDisconnect(ev))) => {
                             return Some(Ok(Event::ClientDisconnect(ev)));
@@ -359,6 +363,7 @@ pub struct Session {
 #[derive(Debug)]
 pub enum Event {
     Speaking(Speaking),
+    ClientConnect(ClientConnect),
     ClientDisconnect(ClientDisconnect),
     /// Voice connection was disconnected and managed to reform the connection.
     ChangeSocket(RtpSocket),
