@@ -36,4 +36,6 @@ impl From<DiscordInteraction> for Interaction {
 pub enum CommandType {
     /// Pushes a new track onto the queue.
     Play(Track),
+    /// Skips the currently playing track.
+    Skip,
 }

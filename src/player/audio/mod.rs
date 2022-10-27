@@ -218,7 +218,7 @@ impl Track {
                 proxy_icon_url: None,
             }),
             // TODO: color
-            color: Some(0xFFFFFF),
+            color: Some(0xEE1428),
             description: None,
             fields: Vec::new(),
             footer: None,

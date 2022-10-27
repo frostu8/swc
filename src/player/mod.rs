@@ -276,6 +276,28 @@ async fn run_inner(
 
                         tokio::spawn(fut);
                     }
+                    CommandType::Skip => {
+                        // try to pull source off of queue
+                        change_source(&mut stream, queue.next()).await
+                            .context("failed to start audio stream")?;
+
+                        let fut = interaction_client
+                            .create_response(
+                                command.interaction.id,
+                                &command.interaction.token,
+                                &InteractionResponse {
+                                    kind: InteractionResponseType::ChannelMessageWithSource,
+                                    data: Some(InteractionResponseData {
+                                        // TODO: embed magic
+                                        content: Some("skipped song".into()),
+                                        ..Default::default()
+                                    }),
+                                },
+                            )
+                            .exec();
+
+                        tokio::spawn(fut);
+                    }
                 }
 
                 if stream.is_none() {

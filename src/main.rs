@@ -116,6 +116,19 @@ pub async fn handle(
             })
                 .unwrap();
         }
+        "skip" => {
+            // TODO: handle missing player
+            let player = manager
+                .get(interaction.guild_id.expect("guild_id in command"))
+                .await
+                .unwrap();
+
+            player.command(Command {
+                interaction: interaction.into(),
+                kind: CommandType::Skip,
+            })
+                .unwrap();
+        }
         _ => log::warn!("unknown command /{}", data.name)
     }
 }
