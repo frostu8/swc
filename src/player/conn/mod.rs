@@ -85,8 +85,7 @@ impl Connection {
                         }
                         Some(Err(err)) if err.can_resume() => {
                             match self.resume().await {
-                                Ok(Some(rtp)) => return Some(Ok(Event::ChangeSocket(rtp))),
-                                Ok(None) => (),
+                                Ok(()) => (),
                                 Err(err) => return Some(Err(err)),
                             }
                         }
@@ -246,11 +245,10 @@ impl Connection {
     }
 
     /// Completes a session resume handshake with the voice server. See
-    /// [discord's docs][1] for more information. If a reconnect is required,
-    /// also returns the new `RtpSocket`.
+    /// [discord's docs][1] for more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-    async fn resume(&mut self) -> Result<Option<RtpSocket>, Error> {
+    async fn resume(&mut self) -> Result<(), Error> {
         debug!("begin websocket resume handshake");
 
         send(
@@ -279,7 +277,7 @@ impl Connection {
             }
         }
 
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -365,8 +363,6 @@ pub enum Event {
     Speaking(Speaking),
     ClientConnect(ClientConnect),
     ClientDisconnect(ClientDisconnect),
-    /// Voice connection was disconnected and managed to reform the connection.
-    ChangeSocket(RtpSocket),
 }
 
 /// Voice command.

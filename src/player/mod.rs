@@ -8,7 +8,7 @@ mod manager;
 
 pub use manager::Manager;
 
-use conn::{payload::Speaking, Connection, Event, RtpPacket, RtpSocket, Session};
+use conn::{payload::Speaking, Connection, RtpPacket, RtpSocket, Session};
 use audio::{Source, Track, Queue};
 use commands::{Command, CommandType};
 use constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX};
@@ -208,10 +208,6 @@ async fn run_inner(
             // voice websocket event
             ev = conn.recv() => {
                 match ev {
-                    Some(Ok(Event::ChangeSocket(new_rtp))) => {
-                        // update socket
-                        rtp = new_rtp;
-                    }
                     Some(Ok(ev)) => {
                         // discard event
                         debug!("voice ev: {:?}", ev);
