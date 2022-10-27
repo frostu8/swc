@@ -10,7 +10,7 @@ use std::str::Utf8Error;
 
 use tokio::net::UdpSocket;
 
-use crate::constants::{MONO_FRAME_SIZE, VOICE_PACKET_MAX};
+use super::super::constants::{MONO_FRAME_SIZE, VOICE_PACKET_MAX};
 
 use xsalsa20poly1305::TAG_SIZE;
 

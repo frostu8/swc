@@ -4,7 +4,7 @@ mod queue;
 
 pub use queue::Queue;
 
-use crate::constants::{SAMPLE_RATE, STEREO_FRAME_SIZE};
+use super::constants::{SAMPLE_RATE, STEREO_FRAME_SIZE};
 
 use tokio::process::{Child, Command};
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader, AsyncBufReadExt};

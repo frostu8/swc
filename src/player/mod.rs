@@ -1,6 +1,7 @@
 //! Provides the audio [`Player`] and the player manager [`Manager`].
 
 pub mod audio;
+pub mod constants;
 pub mod commands;
 mod conn;
 mod manager;
@@ -10,7 +11,7 @@ pub use manager::Manager;
 use conn::{payload::Speaking, Connection, Event, RtpPacket, RtpSocket, Session};
 use audio::{Source, Track, Queue};
 use commands::{Command, CommandType};
-use crate::constants::TIMESTEP_LENGTH;
+use constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX};
 
 use anyhow::{bail, Context as _, Error};
 
@@ -309,7 +310,7 @@ async fn run_inner(
 struct RtpStreamer {
     source: Source,
 
-    packet: RtpPacket<[u8; crate::constants::VOICE_PACKET_MAX]>,
+    packet: RtpPacket<[u8; VOICE_PACKET_MAX]>,
     next_packet: Instant,
     ready: bool,
 }
