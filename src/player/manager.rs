@@ -9,10 +9,11 @@ use tokio::sync::RwLock;
 
 use twilight_gateway::Cluster;
 use twilight_http::Client;
+use twilight_model::voice::VoiceState;
 use twilight_model::gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate};
 use twilight_model::gateway::payload::outgoing::UpdateVoiceState;
 use twilight_model::id::{
-    marker::{ChannelMarker, GuildMarker, UserMarker, ApplicationMarker},
+    marker::{ChannelMarker, GuildMarker, UserMarker},
     Id,
 };
 
@@ -22,7 +23,6 @@ use twilight_model::id::{
 #[derive(Clone)]
 pub struct Manager {
     user_id: Id<UserMarker>,
-    application_id: Id<ApplicationMarker>,
     mref: Arc<ManagerRef>,
     http_client: Arc<Client>,
     gateway: Arc<Cluster>,
@@ -36,13 +36,11 @@ impl Manager {
     /// Creates a new manager.
     pub fn new(
         user_id: Id<UserMarker>,
-        application_id: Id<ApplicationMarker>,
         http_client: Arc<Client>,
         gateway: Arc<Cluster>,
     ) -> Manager {
         Manager {
             user_id,
-            application_id,
             mref: Arc::new(ManagerRef {
                 players: RwLock::new(HashMap::new()),
             }),
@@ -115,7 +113,26 @@ impl Manager {
     ///
     /// Returns `None` if it does not exist or the player is closed.
     async fn new_player(&self, guild_id: Id<GuildMarker>) -> Player {
-        let player = Player::new(self.http_client.clone(), self.user_id, self.application_id, guild_id).await;
+        // we don't have to provide an accurate state, just something to satisfy
+        // the rust type checker
+        let state = VoiceState {
+            channel_id: None,
+            guild_id: Some(guild_id),
+            user_id: self.user_id,
+            deaf: false,
+            mute: false,
+            self_deaf: false,
+            self_mute: false,
+            self_stream: false,
+            self_video: false,
+            suppress: false,
+            token: None,
+            session_id: String::new(),
+            member: None,
+            request_to_speak_timestamp: None,
+        };
+
+        let player = Player::new(self.http_client.clone(), self.user_id, guild_id, state).await;
 
         self.mref
             .players

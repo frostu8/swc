@@ -2,7 +2,8 @@ use futures_util::StreamExt;
 use log::LevelFilter;
 use std::{env, sync::Arc};
 use twilight_gateway::{Cluster, Intents};
-use twilight_http::Client;
+use twilight_http::client::{Client, InteractionClient};
+use twilight_cache_inmemory::InMemoryCache;
 
 use swc::player::{Manager, audio::Track, commands::{Command, CommandType}};
 
@@ -11,8 +12,11 @@ use twilight_model::{
         application_command::{CommandData, CommandOptionValue},
         Interaction, InteractionData,
     },
+    channel::message::MessageFlags,
+    http::interaction::{
+        InteractionResponse, InteractionResponseType, InteractionResponseData,
+    },
     gateway::event::Event, 
-    id::Id,
 };
 
 #[tokio::main]
@@ -25,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
 
     // initialize discord cluster
     let (cluster, mut events) =
-        Cluster::new(env::var("DISCORD_TOKEN")?, Intents::GUILD_VOICE_STATES).await?;
+        Cluster::new(env::var("DISCORD_TOKEN")?, Intents::GUILDS | Intents::GUILD_VOICE_STATES).await?;
     let cluster = Arc::new(cluster);
 
     // spawn cluster thread
@@ -37,29 +41,33 @@ async fn main() -> anyhow::Result<()> {
     // create http client
     let http_client = Arc::new(Client::new(env::var("DISCORD_TOKEN")?));
 
+    // create cache
+    let cache = Arc::new(InMemoryCache::builder().message_cache_size(10).build());
+
     let mut manager: Option<Manager> = None;
 
     while let Some((_, ev)) = events.next().await {
+        cache.update(&ev);
+
         match ev {
             Event::Ready(ready) => {
                 let user_id = ready.user.id;
-                let application_id = ready.application.id;
 
                 // initialize manager
-                manager = Some(Manager::new(user_id, application_id, http_client.clone(), Arc::clone(&cluster)));
-
-                let player = manager
-                    .as_ref()
-                    .unwrap()
-                    .join(Id::new(683483117473759249), Id::new(683483410962055270))
-                    .await;
+                manager = Some(Manager::new(user_id, http_client.clone(), Arc::clone(&cluster)));
 
                 //player.push(Source::ytdl("https://youtu.be/vqzMdWcwSQs").await.unwrap()).unwrap();
             }
             Event::InteractionCreate(mut interaction) => {
                 match interaction.data.take() {
                     Some(InteractionData::ApplicationCommand(data)) => {
-                        tokio::spawn(handle(manager.clone().unwrap(), interaction.0, data));
+                        tokio::spawn(handle(
+                            manager.clone().unwrap(),
+                            http_client.clone(),
+                            cache.clone(),
+                            interaction.0,
+                            data
+                        ));
                     }
                     _ => ()
                 }
@@ -84,9 +92,80 @@ async fn main() -> anyhow::Result<()> {
 /// Handles execution of a command.
 pub async fn handle(
     manager: Manager,
+    http_client: Arc<Client>,
+    cache: Arc<InMemoryCache>,
     interaction: Interaction,
     data: Box<CommandData>,
 ) {
+    let guild_id = interaction.guild_id.expect("guild_id in slash command");
+    let user_id = interaction.member.as_ref().expect("user in slash command").user.as_ref().unwrap().id;
+
+    let channel_id = cache
+        .voice_state(user_id, guild_id)
+        .map(|s| s.channel_id());
+
+    // flag used to control if an interaction is updated because it would take
+    // too long to handle.
+    let mut acked = false;
+
+    // get player
+    let player = if let Some(channel_id) = channel_id {
+        if let Some(player) = manager.get(guild_id).await {
+            // check if we are in the same channel
+            if channel_id == player.channel_id().await {
+                player
+            } else {
+                let _ = http_client
+                    .interaction(interaction.application_id)
+                    .create_response(
+                        interaction.id,
+                        &interaction.token,
+                        &InteractionResponse {
+                            kind: InteractionResponseType::ChannelMessageWithSource,
+                            data: Some(InteractionResponseData {
+                                content: Some("you must be in the same voice channel as the bot to use this!".into()),
+                                flags: Some(MessageFlags::EPHEMERAL),
+                                ..Default::default()
+                            }),
+                        },
+                    )
+                    .exec()
+                    .await;
+
+                return;
+            }
+        } else {
+            // players take a *long* time to initialize
+            ack_interaction(
+                &interaction,
+                http_client.interaction(interaction.application_id),
+            ).await;
+            acked = true;
+
+            // join channel
+            manager.join(guild_id, channel_id).await
+        }
+    } else {
+        let _ = http_client
+            .interaction(interaction.application_id)
+            .create_response(
+                interaction.id,
+                &interaction.token,
+                &InteractionResponse {
+                    kind: InteractionResponseType::ChannelMessageWithSource,
+                    data: Some(InteractionResponseData {
+                        content: Some("you must be in a voice channel to use this!".into()),
+                        flags: Some(MessageFlags::EPHEMERAL),
+                        ..Default::default()
+                    }),
+                },
+            )
+            .exec()
+            .await;
+
+        return;
+    };
+
     match data.name.as_str() {
         "play" => {
             // first argument is always url
@@ -101,34 +180,50 @@ pub async fn handle(
                 _ => panic!("invalid command schema"),
             };
 
+            // loading track information from ytdl takes a while
+            if !acked {
+                // players take a *long* time to initialize
+                ack_interaction(
+                    &interaction,
+                    http_client.interaction(interaction.application_id),
+                ).await;
+                acked = true;
+            }
+
             // TODO: gracefully handle error
             let track = Track::ytdl(url).await.unwrap();
 
-            // TODO: handle missing player
-            let player = manager
-                .get(interaction.guild_id.expect("guild_id in command"))
-                .await
-                .unwrap();
-
             player.command(Command {
                 interaction: interaction.into(),
+                update: acked,
                 kind: CommandType::Play(track),
             })
                 .unwrap();
         }
         "skip" => {
-            // TODO: handle missing player
-            let player = manager
-                .get(interaction.guild_id.expect("guild_id in command"))
-                .await
-                .unwrap();
-
             player.command(Command {
                 interaction: interaction.into(),
+                update: acked,
                 kind: CommandType::Skip,
             })
                 .unwrap();
         }
         _ => log::warn!("unknown command /{}", data.name)
     }
+}
+
+fn ack_interaction(
+    interaction: &Interaction,
+    client: InteractionClient,
+) -> impl std::future::Future {
+    client
+        .create_response(
+            interaction.id,
+            &interaction.token,
+            &InteractionResponse {
+                kind: InteractionResponseType::DeferredChannelMessageWithSource,
+                data: None,
+            },
+        )
+        .exec()
 }

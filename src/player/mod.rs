@@ -15,7 +15,7 @@ use constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX};
 
 use anyhow::{bail, Context as _, Error};
 
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{RwLock, mpsc::{self, UnboundedReceiver, UnboundedSender}};
 use tokio::time::{sleep_until, timeout_at, Duration, Instant};
 
 use std::sync::Arc;
@@ -23,9 +23,10 @@ use std::sync::Arc;
 use twilight_model::{
     gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
     channel::embed::Embed,
-    http::interaction::{InteractionResponse, InteractionResponseType, InteractionResponseData},
+    //http::interaction::{InteractionResponse, InteractionResponseType, InteractionResponseData},
+    voice::VoiceState,
     id::{
-        marker::{GuildMarker, UserMarker, ApplicationMarker},
+        marker::{GuildMarker, ChannelMarker, UserMarker},
         Id,
     },
 };
@@ -35,6 +36,7 @@ use twilight_http::Client;
 #[derive(Clone)]
 pub struct Player {
     guild_id: Id<GuildMarker>,
+    state: Arc<RwLock<VoiceState>>,
 
     gateway_tx: UnboundedSender<GatewayEvent>,
     commands_tx: UnboundedSender<Command>,
@@ -45,25 +47,27 @@ impl Player {
     pub async fn new(
         http_client: Arc<Client>,
         user_id: impl Into<Id<UserMarker>>,
-        application_id: impl Into<Id<ApplicationMarker>>,
         guild_id: impl Into<Id<GuildMarker>>,
+        state: VoiceState,
     ) -> Player {
         let user_id = user_id.into();
-        let application_id = application_id.into();
         let guild_id = guild_id.into();
 
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
 
+        let state = Arc::new(RwLock::new(state));
+        let state_clone = state.clone();
+
         // spawn player task
         tokio::spawn(async move {
             let fut = PlayerState::new(
                 http_client,
-                application_id,
                 user_id,
                 guild_id,
+                state_clone,
                 gateway_rx,
-                commands_rx
+                commands_rx,
             );
 
             match tokio::time::timeout(Duration::from_millis(5000), fut).await {
@@ -79,6 +83,7 @@ impl Player {
         // create Player
         Player {
             guild_id,
+            state,
             gateway_tx,
             commands_tx,
         }
@@ -87,6 +92,11 @@ impl Player {
     /// The guild id of the player.
     pub fn guild_id(&self) -> Id<GuildMarker> {
         self.guild_id
+    }
+
+    /// The channel the player is in.
+    pub async fn channel_id(&self) -> Id<ChannelMarker> {
+        self.state.read().await.channel_id.unwrap()
     }
 
     /// Check if the player is closed.
@@ -130,10 +140,10 @@ impl Player {
 
 struct PlayerState {
     http_client: Arc<Client>,
-    application_id: Id<ApplicationMarker>,
     guild_id: Id<GuildMarker>,
     user_id: Id<UserMarker>,
 
+    state: Arc<RwLock<VoiceState>>,
     gateway: UnboundedReceiver<GatewayEvent>,
     commands: UnboundedReceiver<Command>,
 
@@ -154,9 +164,9 @@ impl PlayerState {
     /// Creates a new `PlayerState`.
     pub async fn new(
         http_client: Arc<Client>,
-        application_id: Id<ApplicationMarker>,
         user_id: Id<UserMarker>,
         guild_id: Id<GuildMarker>,
+        state: Arc<RwLock<VoiceState>>,
         mut gateway: UnboundedReceiver<GatewayEvent>,
         commands: UnboundedReceiver<Command>,
     ) -> Result<PlayerState, Error> {
@@ -184,13 +194,18 @@ impl PlayerState {
 
         // establish session
         let session = if let (Some(vseu), Some(vstu)) = (vseu, vstu) {
-            Session {
+            let res = Session {
                 guild_id,
                 user_id,
                 endpoint: vseu.endpoint.unwrap(),
                 token: vseu.token,
-                session_id: vstu.0.session_id,
-            }
+                session_id: vstu.0.session_id.clone(),
+            };
+
+            // update state
+            *state.write().await = vstu.0;
+
+            res
         } else {
             bail!("got no response for voice state update");
         };
@@ -211,10 +226,10 @@ impl PlayerState {
 
         Ok(PlayerState {
             http_client,
-            application_id,
             user_id,
             guild_id,
 
+            state,
             gateway,
             commands,
 
@@ -257,8 +272,8 @@ impl PlayerState {
                             // server update; reconnect
                             self.voice_server_update(vseu).await?;
                         }
-                        Some(GatewayEvent::VoiceStateUpdate(_vstu)) => {
-                            // TODO: handle state update
+                        Some(GatewayEvent::VoiceStateUpdate(vstu)) => {
+                            *self.state.write().await = vstu.0;
                         }
                         None => bail!("gateway closed unexpectedly"),
                     }
@@ -286,7 +301,7 @@ impl PlayerState {
     }
 
     async fn command(&mut self, command: Command) -> Result<(), Error> {
-        match command.kind {
+        match &command.kind {
             CommandType::Play(track) => {
                 let embed = Embed {
                     description: Some("added song to queue".into()),
@@ -294,25 +309,16 @@ impl PlayerState {
                 };
 
                 // add track to queue
-                self.queue.push(track);
+                self.queue.push(track.clone());
 
-                let fut = self
-                    .http_client
-                    .interaction(self.application_id)
-                    .create_response(
-                        command.interaction.id,
-                        &command.interaction.token,
-                        &InteractionResponse {
-                            kind: InteractionResponseType::ChannelMessageWithSource,
-                            data: Some(InteractionResponseData {
-                                embeds: Some(vec![embed]),
-                                ..Default::default()
-                            }),
-                        },
-                    )
-                    .exec();
-
-                tokio::spawn(fut);
+                let http_client = self.http_client.clone();
+                tokio::spawn(async move {
+                    command
+                        .respond()
+                        .embed(embed)
+                        .send(http_client)
+                        .await
+                });
 
                 if self.stream.is_none() {
                     // try to pull source off of queue
@@ -327,24 +333,14 @@ impl PlayerState {
                     .await
                     .context("failed to start audio stream")?;
 
-                let fut = self
-                    .http_client
-                    .interaction(self.application_id)
-                    .create_response(
-                        command.interaction.id,
-                        &command.interaction.token,
-                        &InteractionResponse {
-                            kind: InteractionResponseType::ChannelMessageWithSource,
-                            data: Some(InteractionResponseData {
-                                // TODO: embed magic
-                                content: Some("skipped song".into()),
-                                ..Default::default()
-                            }),
-                        },
-                    )
-                    .exec();
-
-                tokio::spawn(fut);
+                let http_client = self.http_client.clone();
+                tokio::spawn(async move {
+                    command
+                        .respond()
+                        .content("skipped song")
+                        .send(http_client)
+                        .await
+                });
             }
         }
 
