@@ -245,6 +245,15 @@ impl PlayerState {
     ///
     /// This should be called as a parameter to [`tokio::spawn`].
     pub async fn run(mut self) -> Result<(), Error> {
+        let res = self.run_inner().await;
+
+        // kill source gracefully
+        let _ = self.kill_stream().await;
+
+        res
+    }
+
+    async fn run_inner(&mut self) -> Result<(), Error> {
         loop {
             tokio::select! {
                 biased;
@@ -258,8 +267,14 @@ impl PlayerState {
                         }
                         Some(Err(err)) if err.disconnected() => {
                             // normal disconnect event
-                            debug!("disconnected");
-                            break;
+                            // attempt to reconnect if the disconnect was a move
+                            let timeout = Instant::now() + Duration::from_millis(1000);
+                            match timeout_at(timeout, self.reconnect()).await {
+                                // resume normal flow
+                                Ok(Ok(())) => (),
+                                Ok(Err(err)) => return Err(err).context("disconnected"),
+                                Err(_) => bail!("timed out after 1000ms"),
+                            }
                         }
                         Some(Err(err)) => return Err(err).context("voice websocket closed"),
                         None => break,
@@ -293,9 +308,6 @@ impl PlayerState {
                 }
             }
         }
-
-        // kill source gracefully
-        let _ = self.kill_stream().await;
 
         Ok(())
     }
@@ -391,7 +403,42 @@ impl PlayerState {
             Err(_) => bail!("player reconnection timed out after 5000ms!"),
         };
 
+        // TODO: we need to handle speaking a lot better, but this works
+        self.ws.send(Speaking {
+            speaking: 1,
+            ssrc: self.rtp.ssrc(),
+            delay: Some(0),
+        })
+        .await
+        .unwrap();
+
         Ok(())
+    }
+
+    async fn reconnect(&mut self) -> Result<(), Error> {
+        if self.state.read().await.channel_id.is_none() {
+            bail!("disconnected from channel");
+        }
+
+        while let Some(ev) = self.gateway.recv().await {
+            match ev {
+                GatewayEvent::VoiceServerUpdate(vseu) => {
+                    // server update; reconnect
+                    self.voice_server_update(vseu).await?;
+                    return Ok(());
+                }
+                GatewayEvent::VoiceStateUpdate(vstu) => {
+                    if vstu.channel_id.is_none() {
+                        bail!("disconnected from channel");
+                    }
+
+                    // update state
+                    *self.state.write().await = vstu.0;
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("gateway disconnected unexpectedly"))
     }
 }
 
