@@ -5,7 +5,7 @@ use twilight_gateway::{Cluster, Intents};
 use twilight_http::client::{Client, InteractionClient};
 use twilight_cache_inmemory::InMemoryCache;
 
-use swc::player::{Manager, audio::Track, commands::{Command, CommandType}};
+use swc::player::{Manager, audio::Query, commands::{Command, CommandType}};
 
 use twilight_model::{
     application::interaction::{
@@ -191,21 +191,31 @@ pub async fn handle(
             }
 
             // TODO: gracefully handle error
-            let track = Track::ytdl(url).await.unwrap();
-
-            player.command(Command {
-                interaction: interaction.into(),
-                update: acked,
-                kind: CommandType::Play(track),
-            })
-                .unwrap();
+            match Query::new(url).await.unwrap() {
+                Query::Track(track) => {
+                    player.command(Command::new(
+                        interaction,
+                        CommandType::Play(track),
+                        acked,
+                    ))
+                        .unwrap();
+                }
+                Query::Playlist(playlist) => {
+                    player.command(Command::new(
+                        interaction,
+                        CommandType::PlayList(playlist),
+                        acked,
+                    ))
+                        .unwrap();
+                }
+            }
         }
         "skip" => {
-            player.command(Command {
-                interaction: interaction.into(),
-                update: acked,
-                kind: CommandType::Skip,
-            })
+            player.command(Command::new(
+                interaction,
+                CommandType::Skip,
+                acked,
+            ))
                 .unwrap();
         }
         _ => log::warn!("unknown command /{}", data.name)

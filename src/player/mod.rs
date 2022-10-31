@@ -313,7 +313,9 @@ impl PlayerState {
     }
 
     async fn command(&mut self, command: Command) -> Result<(), Error> {
-        match &command.kind {
+        let Command { interaction, kind } = command;
+
+        match kind {
             CommandType::Play(track) => {
                 let embed = Embed {
                     description: Some("added song to queue".into()),
@@ -321,11 +323,36 @@ impl PlayerState {
                 };
 
                 // add track to queue
-                self.queue.push(track.clone());
+                self.queue.push(track);
 
                 let http_client = self.http_client.clone();
                 tokio::spawn(async move {
-                    command
+                    interaction
+                        .respond()
+                        .embed(embed)
+                        .send(http_client)
+                        .await
+                });
+
+                if self.stream.is_none() {
+                    // try to pull source off of queue
+                    self.next()
+                        .await
+                        .context("failed to start audio stream")?;
+                }
+            }
+            CommandType::PlayList(playlist) => {
+                let embed = Embed {
+                    description: Some(format!("enqueued {} songs", playlist.entries().len())),
+                    ..playlist.to_embed()
+                };
+
+                // add tracks to queue
+                self.queue.extend(playlist.into_entries());
+
+                let http_client = self.http_client.clone();
+                tokio::spawn(async move {
+                    interaction
                         .respond()
                         .embed(embed)
                         .send(http_client)
@@ -347,7 +374,7 @@ impl PlayerState {
 
                 let http_client = self.http_client.clone();
                 tokio::spawn(async move {
-                    command
+                    interaction
                         .respond()
                         .content("skipped song")
                         .send(http_client)

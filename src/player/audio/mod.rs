@@ -71,8 +71,8 @@ impl Source {
         Ok(())
     }
 
-    /// Creates a new `Source` from a `ytdl` link.
-    pub async fn new(url: &str) -> Result<Source, Error> {
+    /// Creates a new `Source` from a `ytdl` id.
+    pub async fn new(id: &str) -> Result<Source, Error> {
         let mut ytdl = Command::new("youtube-dl")
             .args(&[
                 "-f",
@@ -80,7 +80,7 @@ impl Source {
                 "-R",
                 "infinite",
                 "-q",
-                url,
+                id,
                 "-o",
                 "-",
             ])
@@ -126,10 +126,11 @@ impl Source {
 /// A single entry in the queue.
 #[derive(Debug, Clone)]
 pub struct Track {
-    url: String,
+    id: String,
     title: String,
     author: Author,
-    thumbnail_url: String,
+    thumbnail_url: Option<String>,
+    url: Option<String>,
 }
 
 /// The author of the track.
@@ -138,24 +139,171 @@ struct Author {
     /// The name of the author.
     pub name: String,
     /// A hyperlink to the author's page.
-    pub url: String,
+    pub url: Option<String>,
 }
 
 impl Track {
-    /// Creates a track from a url passed to `youtube-dl`.
-    pub async fn ytdl(url: &str) -> Result<Track, Error> {
-        #[derive(Deserialize)]
-        struct YtdlQuery {
-            webpage_url: String,
-            title: String,
-            thumbnail: String,
-            uploader: String,
-            uploader_url: String,
-        }
+    /// Creates a detailed Discord embed from the `Track`.
+    ///
+    /// ```ignore
+    /// let embed = Embed {
+    ///     description: String::from("added to queue"),
+    ///     ..track.to_embed()
+    /// };
+    /// ```
+    pub fn to_embed(&self) -> Embed {
+        let Track { url, title, author, thumbnail_url, .. } = self.clone();
 
+        Embed {
+            author: Some(EmbedAuthor {
+                name: author.name,
+                url: author.url,
+                icon_url: None,
+                proxy_icon_url: None,
+            }),
+            // TODO: color
+            color: Some(0xEE1428),
+            description: None,
+            fields: Vec::new(),
+            footer: None,
+            image: None,
+            kind: String::from("rich"),
+            provider: None,
+            title: Some(title),
+            timestamp: None,
+            thumbnail: thumbnail_url
+                .map(|url| EmbedThumbnail {
+                    url: url,
+                    height: None,
+                    width: None,
+                    proxy_url: None,
+                }),
+            url,
+            video: None,
+        }
+    }
+
+    /// Opens an audio stream to the track.
+    pub async fn open(&self) -> Result<Source, Error> {
+        Source::new(&self.id).await
+    }
+
+    /// The url of the track.
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_ref().map(|x| &**x)
+    }
+
+    /// The title of the track.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// A hyperlink to the thumbnail of the track.
+    pub fn thumbnail_url(&self) -> Option<&str> {
+        self.thumbnail_url.as_ref().map(|x| &**x)
+    }
+
+    /// The author's name.
+    pub fn author_name(&self) -> &str {
+        &self.author.name
+    }
+
+    /// A hyperlink to the author's page.
+    pub fn author_url(&self) -> Option<&str> {
+        self.author.url.as_ref().map(|x| &**x)
+    }
+}
+
+/// A collection of tracks.
+#[derive(Clone)]
+pub struct Playlist {
+    id: String,
+    title: String,
+    author: Author,
+    url: String,
+    entries: Vec<Track>,
+}
+
+impl Playlist {
+    /// Creates a detailed Discord embed from the `Playlist`.
+    ///
+    /// ```ignore
+    /// let embed = Embed {
+    ///     description: String::from("added playlist to queue"),
+    ///     ..track.to_embed()
+    /// };
+    /// ```
+    pub fn to_embed(&self) -> Embed {
+        let Playlist { url, title, author, .. } = self.clone();
+
+        Embed {
+            author: Some(EmbedAuthor {
+                name: author.name,
+                url: author.url,
+                icon_url: None,
+                proxy_icon_url: None,
+            }),
+            // TODO: color
+            color: Some(0xEE1428),
+            description: None,
+            fields: Vec::new(),
+            footer: None,
+            image: None,
+            kind: String::from("rich"),
+            provider: None,
+            title: Some(title),
+            timestamp: None,
+            thumbnail: None,
+            url: Some(url),
+            video: None,
+        }
+    }
+
+    /// The url of the playlist.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The title of the playlist.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The author's name.
+    pub fn author_name(&self) -> &str {
+        &self.author.name
+    }
+
+    /// A hyperlink to the author's page.
+    pub fn author_url(&self) -> Option<&str> {
+        self.author.url.as_ref().map(|x| &**x)
+    }
+
+    /// The entries in the playlist.
+    pub fn entries(&self) -> &[Track] {
+        &self.entries
+    }
+
+    /// Unwraps the entries in the playlist.
+    pub fn into_entries(self) -> Vec<Track> {
+        self.entries
+    }
+}
+
+/// A ytdl query.
+pub enum Query {
+    // A single track.
+    Track(Track),
+    // A playlist.
+    Playlist(Playlist),
+}
+
+impl Query {
+    /// Queries `youtube-dl` with the provided url.
+    pub async fn new(url: &str) -> Result<Query, Error> {
         // create process
         let mut ytdl = Command::new("youtube-dl")
-            .args(&["-j", url])
+            .args(&["--yes-playlist", "--flat-playlist", "-J", url])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -183,89 +331,90 @@ impl Track {
         if let Some(err) = err {
             Err(Error::Ytdl(err))
         } else {
-            // parse
-            let q = serde_json::from_str::<YtdlQuery>(&out)
-                .expect("valid json from youtube-dl");
+            // determine if this is a playlist
+            if output_is_playlist(&out) {
+                // parse
+                let q = serde_json::from_str::<YtdlPlaylist>(&out)
+                    .map_err(Error::Json)?;
 
-            Ok(Track {
-                url: q.webpage_url,
-                title: q.title,
-                author: Author {
-                    name: q.uploader,
-                    url: q.uploader_url,
-                },
-                thumbnail_url: q.thumbnail,
-            })
+                Ok(Query::Playlist(q.into()))
+            } else {
+                // parse
+                let q = serde_json::from_str::<YtdlQuery>(&out)
+                    .map_err(Error::Json)?;
+
+                Ok(Query::Track(q.into()))
+            }
         }
     }
+}
 
-    /// Creates a detailed Discord embed from the `Track`.
-    ///
-    /// ```ignore
-    /// let embed = Embed {
-    ///     description: String::from("added to queue"),
-    ///     ..track.to_embed()
-    /// };
-    /// ```
-    pub fn to_embed(&self) -> Embed {
-        let Track { url, title, author, thumbnail_url } = self.clone();
+fn output_is_playlist(out: &str) -> bool {
+    if let Some(from) = out.find(r#""_type":"#) {
+        let from = from + 8;
+        match out[from..].find(&[',', '}'] as &[_]) {
+            Some(to) if out[from..from + to].trim() == r#""playlist""# => true,
+            Some(to) => {
+                info!("{}", out[from..from + to].trim());
+                false
+            }
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
 
-        Embed {
-            author: Some(EmbedAuthor {
-                name: author.name,
-                url: Some(author.url),
-                icon_url: None,
-                proxy_icon_url: None,
-            }),
-            // TODO: color
-            color: Some(0xEE1428),
-            description: None,
-            fields: Vec::new(),
-            footer: None,
-            image: None,
-            kind: String::from("rich"),
-            provider: None,
-            title: Some(title),
-            timestamp: None,
-            thumbnail: Some(EmbedThumbnail {
-                url: thumbnail_url,
-                height: None,
-                width: None,
-                proxy_url: None,
-            }),
-            url: Some(url),
-            video: None,
+#[derive(Deserialize)]
+struct YtdlQuery {
+    id: String,
+    title: String,
+    uploader: String,
+    #[serde(default)]
+    webpage_url: Option<String>,
+    #[serde(default)]
+    thumbnail: Option<String>,
+    #[serde(default)]
+    uploader_url: Option<String>,
+}
+
+impl From<YtdlQuery> for Track {
+    fn from(q: YtdlQuery) -> Track {
+        Track {
+            id: q.id,
+            title: q.title,
+            author: Author {
+                name: q.uploader,
+                url: q.uploader_url,
+            },
+            thumbnail_url: q.thumbnail,
+            url: q.webpage_url,
         }
     }
+}
 
-    /// Opens an audio stream to the track.
-    pub async fn open(&self) -> Result<Source, Error> {
-        Source::new(&self.url).await
-    }
+#[derive(Deserialize)]
+struct YtdlPlaylist {
+    id: String,
+    title: String,
+    uploader: String,
+    uploader_url: String,
+    webpage_url: String,
+    entries: Vec<YtdlQuery>,
+}
 
-    /// The url of the track.
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-
-    /// The title of the track.
-    pub fn title(&self) -> &str {
-        &self.title
-    }
-
-    /// A hyperlink to the thumbnail of the track.
-    pub fn thumbnail_url(&self) -> &str {
-        &self.thumbnail_url
-    }
-
-    /// The author's name.
-    pub fn author_name(&self) -> &str {
-        &self.author.name
-    }
-
-    /// A hyperlink to the author's page.
-    pub fn author_url(&self) -> &str {
-        &self.author.url
+impl From<YtdlPlaylist> for Playlist {
+    fn from(q: YtdlPlaylist) -> Playlist {
+        Playlist {
+            id: q.id,
+            title: q.title,
+            url: q.webpage_url,
+            author: Author {
+                name: q.uploader,
+                url: Some(q.uploader_url),
+            },
+            entries: q.entries.into_iter().map(Into::into).collect(),
+        }
     }
 }
 

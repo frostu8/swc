@@ -69,6 +69,15 @@ impl Queue {
     }
 }
 
+impl Extend<Track> for Queue {
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = Track>,
+    {
+        self.queue.extend(iter)
+    }
+}
+
 impl Default for Queue {
     fn default() -> Queue {
         Queue::new(15)

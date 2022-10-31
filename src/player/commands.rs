@@ -1,6 +1,6 @@
 //! Audio player commands.
 
-use super::audio::Track;
+use super::audio::{Playlist, Track};
 
 use std::sync::Arc;
 
@@ -16,24 +16,49 @@ use twilight_http::{error::Error, client::Client};
 pub struct Command {
     /// The interaction associated with the command.
     pub interaction: Interaction,
-    /// Whether to update an already sent acknowledgement or create an entirely
-    /// new response.
-    pub update: bool,
     /// The action to perform.
     pub kind: CommandType,
 }
 
 impl Command {
-    /// Responds to the command.
+    /// Creates a new `Command`.
+    pub fn new(
+        interaction: impl Into<Interaction>,
+        kind: CommandType,
+        update: bool,
+    ) -> Command {
+        Command {
+            interaction: Interaction {
+                update,
+                ..interaction.into()
+            },
+            kind,
+        }
+    }
+}
+
+/// The interaction associated with the command.
+pub struct Interaction {
+    /// The id of the interaction.
+    pub id: Id<InteractionMarker>,
+    /// The token of the interaction.
+    pub token: String,
+    /// Whether to update an already sent acknowledgement or create an entirely
+    /// new response.
+    pub update: bool,
+    application_id: Id<ApplicationMarker>,
+}
+
+impl Interaction {
+    /// Responds to the interaction.
     pub fn respond<'a>(&'a self) -> CommandResponse<'a> {
-        CommandResponse::new(&self.interaction).update(self.update)
+        CommandResponse::new(&self)
     }
 }
 
 /// A response to a command.
 pub struct CommandResponse<'a> {
     interaction: &'a Interaction,
-    update: bool,
 
     content: Option<String>,
     embed: Option<Embed>,
@@ -63,7 +88,7 @@ impl<'a> CommandResponse<'a> {
     ) -> Result<(), Error> {
         let client = http_client.interaction(self.interaction.application_id);
 
-        if self.update {
+        if self.interaction.update {
             client
                 .update_response(&self.interaction.token)
                 .content(self.content.as_ref().map(|x| &**x))
@@ -96,28 +121,11 @@ impl<'a> CommandResponse<'a> {
     fn new(interaction: &'a Interaction) -> CommandResponse<'a> {
         CommandResponse {
             interaction,
-            update: false,
 
             content: None,
             embed: None,
         }
     }
-
-    fn update(self, update: bool) -> CommandResponse<'a> {
-        CommandResponse {
-            update,
-            ..self
-        }
-    }
-}
-
-/// The interaction associated with the command.
-pub struct Interaction {
-    /// The id of the interaction.
-    pub id: Id<InteractionMarker>,
-    /// The token of the interaction.
-    pub token: String,
-    application_id: Id<ApplicationMarker>,
 }
 
 impl From<DiscordInteraction> for Interaction {
@@ -125,6 +133,7 @@ impl From<DiscordInteraction> for Interaction {
         Interaction {
             id: d.id,
             token: d.token,
+            update: false,
             application_id: d.application_id,
         }
     }
@@ -134,6 +143,8 @@ impl From<DiscordInteraction> for Interaction {
 pub enum CommandType {
     /// Pushes a new track onto the queue.
     Play(Track),
+    /// Pushes the head of a new playlist onto the queue.
+    PlayList(Playlist),
     /// Skips the currently playing track.
     Skip,
 }
