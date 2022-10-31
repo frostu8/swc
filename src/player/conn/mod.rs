@@ -106,9 +106,18 @@ impl Connection {
 
     /// Sends an event to the remote endpoint.
     pub async fn send(&mut self, command: impl Command) -> Result<(), Error> {
-        send(&mut self.wss, &command.to_event())
-            .await
-            .map_err(Into::into)
+        let ev = command.to_event();
+
+        match send(&mut self.wss, &ev).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.can_resume() => {
+                match self.resume().await {
+                    Ok(()) => send(&mut self.wss, &ev).await,
+                    Err(err) => return Err(err),
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Gets session information.
