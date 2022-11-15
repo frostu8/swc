@@ -126,7 +126,6 @@ impl Manager {
             self_stream: false,
             self_video: false,
             suppress: false,
-            token: None,
             session_id: String::new(),
             member: None,
             request_to_speak_timestamp: None,

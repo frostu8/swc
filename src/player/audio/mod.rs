@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader, AsyncBufReadExt};
 use std::process::Stdio;
 use std::fmt::{self, Display, Formatter};
 
-use twilight_model::channel::embed::{Embed, EmbedAuthor, EmbedThumbnail};
+use twilight_model::channel::message::embed::{Embed, EmbedAuthor, EmbedThumbnail};
 
 use serde::Deserialize;
 

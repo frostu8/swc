@@ -7,7 +7,7 @@ use std::sync::Arc;
 use twilight_model::{
     application::interaction::Interaction as DiscordInteraction,
     http::interaction::{InteractionResponseData, InteractionResponse, InteractionResponseType},
-    channel::embed::Embed,
+    channel::message::embed::Embed,
     id::{Id, marker::{ApplicationMarker, InteractionMarker}},
 };
 use twilight_http::{error::Error, client::Client};

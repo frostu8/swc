@@ -8,6 +8,7 @@ use twilight_cache_inmemory::InMemoryCache;
 use swc::player::{Manager, audio::Query, commands::{Command, CommandType}};
 
 use twilight_model::{
+    id::Id,
     application::interaction::{
         application_command::{CommandData, CommandOptionValue},
         Interaction, InteractionData,
@@ -52,6 +53,12 @@ async fn main() -> anyhow::Result<()> {
         match ev {
             Event::Ready(ready) => {
                 let user_id = ready.user.id;
+
+                // setup commands
+                let _ = http_client
+                    .interaction(ready.application.id)
+                    .set_guild_commands(Id::new(971294860336316428), &swc::commands())
+                    .await;
 
                 // initialize manager
                 manager = Some(Manager::new(user_id, http_client.clone(), Arc::clone(&cluster)));

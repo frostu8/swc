@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use twilight_model::{
     gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
-    channel::embed::Embed,
+    channel::message::embed::Embed,
     //http::interaction::{InteractionResponse, InteractionResponseType, InteractionResponseData},
     voice::VoiceState,
     id::{
