@@ -2,15 +2,13 @@
 
 pub mod audio;
 pub mod constants;
-pub mod commands;
 mod conn;
 mod manager;
 
 pub use manager::Manager;
 
 use conn::{payload::Speaking, Connection, RtpPacket, RtpSocket, Session};
-use audio::{Source, Queue};
-use commands::{Command, CommandType};
+use audio::{Source, Queue, Track};
 use constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX};
 
 use anyhow::{bail, Context as _, Error};
@@ -22,7 +20,6 @@ use std::sync::Arc;
 
 use twilight_model::{
     gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
-    channel::message::embed::Embed,
     //http::interaction::{InteractionResponse, InteractionResponseType, InteractionResponseData},
     voice::VoiceState,
     id::{
@@ -31,6 +28,11 @@ use twilight_model::{
     },
 };
 use twilight_http::Client;
+
+enum Command {
+    Enqueue(Vec<Track>),
+    Next,
+}
 
 /// A music player for a specific guild.
 #[derive(Clone)]
@@ -104,12 +106,34 @@ impl Player {
         self.gateway_tx.is_closed()
     }
 
-    /// Sends a command to the player.
+    /// Sends a track to the player.
     ///
     /// # Panics
     /// Panics if an error was returned last call and the `Player` is used
     /// again.
-    pub fn command(&self, command: Command) -> Result<(), Error> {
+    pub fn enqueue(&self, track: Track) -> Result<(), Error> {
+        self.enqueue_all(vec![track])
+    }
+
+    /// Sends many tracks to the player.
+    ///
+    /// # Panics
+    /// Panics if an error was returned last call and the `Player` is used
+    /// again.
+    pub fn enqueue_all(&self, tracks: Vec<Track>) -> Result<(), Error> {
+        self.command(Command::Enqueue(tracks))
+    }
+
+    /// Skips the currently playing song.
+    ///
+    /// # Panics
+    /// Panics if an error was returned last call and the `Player` is used
+    /// again.
+    pub fn next(&self) -> Result<(), Error> {
+        self.command(Command::Next)
+    }
+
+    fn command(&self, command: Command) -> Result<(), Error> {
         self.commands_tx
             .send(command)
             .map_err(|_| anyhow::anyhow!("player closed"))
@@ -313,26 +337,10 @@ impl PlayerState {
     }
 
     async fn command(&mut self, command: Command) -> Result<(), Error> {
-        let Command { interaction, kind } = command;
-
-        match kind {
-            CommandType::Play(track) => {
-                let embed = Embed {
-                    description: Some("added song to queue".into()),
-                    ..track.to_embed()
-                };
-
+        match command {
+            Command::Enqueue(tracks) => {
                 // add track to queue
-                self.queue.push(track);
-
-                let http_client = self.http_client.clone();
-                tokio::spawn(async move {
-                    interaction
-                        .respond()
-                        .embed(embed)
-                        .send(http_client)
-                        .await
-                });
+                self.queue.extend(tracks);
 
                 if self.stream.is_none() {
                     // try to pull source off of queue
@@ -341,45 +349,11 @@ impl PlayerState {
                         .context("failed to start audio stream")?;
                 }
             }
-            CommandType::PlayList(playlist) => {
-                let embed = Embed {
-                    description: Some(format!("enqueued {} songs", playlist.entries().len())),
-                    ..playlist.to_embed()
-                };
-
-                // add tracks to queue
-                self.queue.extend(playlist.into_entries());
-
-                let http_client = self.http_client.clone();
-                tokio::spawn(async move {
-                    interaction
-                        .respond()
-                        .embed(embed)
-                        .send(http_client)
-                        .await
-                });
-
-                if self.stream.is_none() {
-                    // try to pull source off of queue
-                    self.next()
-                        .await
-                        .context("failed to start audio stream")?;
-                }
-            }
-            CommandType::Skip => {
+            Command::Next => {
                 // try to pull source off of queue
                 self.next()
                     .await
                     .context("failed to start audio stream")?;
-
-                let http_client = self.http_client.clone();
-                tokio::spawn(async move {
-                    interaction
-                        .respond()
-                        .content("skipped song")
-                        .send(http_client)
-                        .await
-                });
             }
         }
 

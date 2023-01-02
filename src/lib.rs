@@ -4,6 +4,7 @@
 extern crate log;
 
 pub mod player;
+pub mod interaction;
 
 use twilight_model::application::command::{Command, CommandType, CommandOption, CommandOptionType};
 use twilight_model::id::Id;

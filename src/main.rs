@@ -2,10 +2,11 @@ use futures_util::StreamExt;
 use log::LevelFilter;
 use std::{env, sync::Arc};
 use twilight_gateway::{Cluster, Intents};
-use twilight_http::client::{Client, InteractionClient};
+use twilight_http::client::Client;
 use twilight_cache_inmemory::InMemoryCache;
 
-use swc::player::{Manager, audio::Query, commands::{Command, CommandType}};
+use swc::player::{Manager, audio::Query};
+use swc::interaction::ResponseExt;
 
 use twilight_model::{
     id::Id,
@@ -13,10 +14,7 @@ use twilight_model::{
         application_command::{CommandData, CommandOptionValue},
         Interaction, InteractionData,
     },
-    channel::message::MessageFlags,
-    http::interaction::{
-        InteractionResponse, InteractionResponseType, InteractionResponseData,
-    },
+    channel::message::Embed,
     gateway::event::Event, 
 };
 
@@ -111,10 +109,6 @@ pub async fn handle(
         .voice_state(user_id, guild_id)
         .map(|s| s.channel_id());
 
-    // flag used to control if an interaction is updated because it would take
-    // too long to handle.
-    let mut acked = false;
-
     // get player
     let player = if let Some(channel_id) = channel_id {
         if let Some(player) = manager.get(guild_id).await {
@@ -124,50 +118,21 @@ pub async fn handle(
             } else {
                 let _ = http_client
                     .interaction(interaction.application_id)
-                    .create_response(
-                        interaction.id,
-                        &interaction.token,
-                        &InteractionResponse {
-                            kind: InteractionResponseType::ChannelMessageWithSource,
-                            data: Some(InteractionResponseData {
-                                content: Some("you must be in the same voice channel as the bot to use this!".into()),
-                                flags: Some(MessageFlags::EPHEMERAL),
-                                ..Default::default()
-                            }),
-                        },
-                    )
-                    .exec()
+                    .respond(interaction.id, &interaction.token)
+                    .error("you must be in the same voice channel as the bot to use this!")
                     .await;
 
                 return;
             }
         } else {
-            // players take a *long* time to initialize
-            ack_interaction(
-                &interaction,
-                http_client.interaction(interaction.application_id),
-            ).await;
-            acked = true;
-
             // join channel
             manager.join(guild_id, channel_id).await
         }
     } else {
         let _ = http_client
             .interaction(interaction.application_id)
-            .create_response(
-                interaction.id,
-                &interaction.token,
-                &InteractionResponse {
-                    kind: InteractionResponseType::ChannelMessageWithSource,
-                    data: Some(InteractionResponseData {
-                        content: Some("you must be in a voice channel to use this!".into()),
-                        flags: Some(MessageFlags::EPHEMERAL),
-                        ..Default::default()
-                    }),
-                },
-            )
-            .exec()
+            .respond(interaction.id, &interaction.token)
+            .error("you must be in a voice channel to use this!")
             .await;
 
         return;
@@ -187,60 +152,43 @@ pub async fn handle(
                 _ => panic!("invalid command schema"),
             };
 
-            // loading track information from ytdl takes a while
-            if !acked {
-                // players take a *long* time to initialize
-                ack_interaction(
-                    &interaction,
-                    http_client.interaction(interaction.application_id),
-                ).await;
-                acked = true;
-            }
-
             // TODO: gracefully handle error
             match Query::new(url).await.unwrap() {
                 Query::Track(track) => {
-                    player.command(Command::new(
-                        interaction,
-                        CommandType::Play(track),
-                        acked,
-                    ))
-                        .unwrap();
+                    let _ = http_client
+                        .interaction(interaction.application_id)
+                        .respond(interaction.id, &interaction.token)
+                        .embed(Embed {
+                            description: Some("track added to queue".to_owned()),
+                            ..track.to_embed()
+                        })
+                        .await;
+
+                    player.enqueue(track).unwrap();
                 }
                 Query::Playlist(playlist) => {
-                    player.command(Command::new(
-                        interaction,
-                        CommandType::PlayList(playlist),
-                        acked,
-                    ))
-                        .unwrap();
+                    let _ = http_client
+                        .interaction(interaction.application_id)
+                        .respond(interaction.id, &interaction.token)
+                        .embed(Embed {
+                            description: Some("playlist added to queue".to_owned()),
+                            ..playlist.to_embed()
+                        })
+                        .await;
+
+                    player.enqueue_all(playlist.into_entries()).unwrap();
                 }
             }
         }
         "skip" => {
-            player.command(Command::new(
-                interaction,
-                CommandType::Skip,
-                acked,
-            ))
-                .unwrap();
+            let _ = http_client
+                .interaction(interaction.application_id)
+                .respond(interaction.id, &interaction.token)
+                .content("<:thoomb:1059535720097796196> track skipped")
+                .await;
+
+            player.next().unwrap();
         }
         _ => log::warn!("unknown command /{}", data.name)
     }
-}
-
-fn ack_interaction(
-    interaction: &Interaction,
-    client: InteractionClient,
-) -> impl std::future::Future {
-    client
-        .create_response(
-            interaction.id,
-            &interaction.token,
-            &InteractionResponse {
-                kind: InteractionResponseType::DeferredChannelMessageWithSource,
-                data: None,
-            },
-        )
-        .exec()
 }
