@@ -152,7 +152,11 @@ pub async fn handle(
                 _ => panic!("invalid command schema"),
             };
 
-            // TODO: gracefully handle error
+            // querying sometimes takes a while, so ack the response.
+            let client = http_client.interaction(interaction.application_id);
+
+            let _ = client.ack(interaction.id, &interaction.token).await;
+
             match Query::new(url).await {
                 Ok(Query::Track(track)) => {
                     let _ = http_client
@@ -162,6 +166,7 @@ pub async fn handle(
                             description: Some("track added to queue".to_owned()),
                             ..track.to_embed()
                         })
+                        .update()
                         .await;
 
                     player.enqueue(track).unwrap();
@@ -174,6 +179,7 @@ pub async fn handle(
                             description: Some("playlist added to queue".to_owned()),
                             ..playlist.to_embed()
                         })
+                        .update()
                         .await;
 
                     player.enqueue_all(playlist.into_entries()).unwrap();
@@ -183,6 +189,7 @@ pub async fn handle(
                         .interaction(interaction.application_id)
                         .respond(interaction.id, &interaction.token)
                         .error(err)
+                        .update()
                         .await;
                 }
             }

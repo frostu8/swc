@@ -8,6 +8,8 @@ use twilight_model::{
 
 use twilight_http::{
     request::application::interaction::CreateResponse, client::InteractionClient,
+    response::{ResponseFuture, marker::EmptyBody},
+    Error,
 };
 
 use std::fmt::Display;
@@ -17,6 +19,9 @@ use std::future::IntoFuture;
 pub trait ResponseExt {
     /// Creates a [`Response`] for an interaction.
     fn respond<'a>(&'a self, id: Id<InteractionMarker>, token: &'a str) -> Response<'a>;
+
+    /// Acknowledges an interaction.
+    fn ack(&self, id: Id<InteractionMarker>, token: &str) -> ResponseFuture<EmptyBody>;
 }
 
 impl<'c> ResponseExt for InteractionClient<'c> {
@@ -32,6 +37,23 @@ impl<'c> ResponseExt for InteractionClient<'c> {
 
             data: Default::default(),
         }
+    }
+
+    fn ack(
+        &self,
+        id: Id<InteractionMarker>,
+        token: &str,
+    ) -> ResponseFuture<EmptyBody> {
+        self
+            .create_response(
+                id,
+                &token,
+                &InteractionResponse {
+                    kind: InteractionResponseType::DeferredChannelMessageWithSource,
+                    data: None,
+                },
+            )
+            .into_future()
     }
 }
 
@@ -97,6 +119,19 @@ impl<'a> Response<'a> {
         self
             .content(format!("error:\n{}", err))
             .ephemeral()
+    }
+
+    /// Updates an already sent response.
+    pub async fn update(self) -> Result<(), Error> {
+        self
+            .client
+            .update_response(&self.token)
+            .content(self.data.content.as_ref().map(|x| &**x))
+            .unwrap()
+            .embeds(self.data.embeds.as_ref().map(|x| &x[..]))
+            .unwrap()
+            .await
+            .map(|_| ())
     }
 }
 
