@@ -95,7 +95,9 @@ impl Manager {
 
         let players = self.mref.players.read().await;
         if let Some(player) = players.get(&guild_id) {
-            let _ = player.voice_state_update(ev);
+            if ev.0.user_id == self.user_id {
+                let _ = player.voice_state_update(ev);
+            }
         }
     }
 
