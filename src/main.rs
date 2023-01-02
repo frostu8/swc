@@ -153,8 +153,8 @@ pub async fn handle(
             };
 
             // TODO: gracefully handle error
-            match Query::new(url).await.unwrap() {
-                Query::Track(track) => {
+            match Query::new(url).await {
+                Ok(Query::Track(track)) => {
                     let _ = http_client
                         .interaction(interaction.application_id)
                         .respond(interaction.id, &interaction.token)
@@ -166,7 +166,7 @@ pub async fn handle(
 
                     player.enqueue(track).unwrap();
                 }
-                Query::Playlist(playlist) => {
+                Ok(Query::Playlist(playlist)) => {
                     let _ = http_client
                         .interaction(interaction.application_id)
                         .respond(interaction.id, &interaction.token)
@@ -177,6 +177,13 @@ pub async fn handle(
                         .await;
 
                     player.enqueue_all(playlist.into_entries()).unwrap();
+                }
+                Err(err) => {
+                    let _ = http_client
+                        .interaction(interaction.application_id)
+                        .respond(interaction.id, &interaction.token)
+                        .error(err)
+                        .await;
                 }
             }
         }
