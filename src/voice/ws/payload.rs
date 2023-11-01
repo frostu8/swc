@@ -299,7 +299,6 @@ pub struct ClientDisconnect {
 /// See [discord docs][1] for more info.
 ///
 /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-udp-connection-encryption-modes
-// TODO: this should probably be moved to super::payload
 #[derive(Clone, Debug, PartialEq)]
 pub enum EncryptionMode {
     /// The nonce bytes are the RTP header

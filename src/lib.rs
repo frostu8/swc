@@ -1,10 +1,14 @@
 //! Soundwave command library.
 
+#![feature(never_type)]
+
 #[macro_use]
 extern crate log;
 
-pub mod player;
-pub mod interaction;
+//pub mod player;
+//pub mod interaction;
+//pub mod music;
+pub mod voice;
 
 use twilight_model::application::command::{Command, CommandType, CommandOption, CommandOptionType};
 use twilight_model::id::Id;
@@ -24,6 +28,7 @@ macro_rules! command {
             name_localizations: None,
             options: vec![$($options),*],
             version: Id::new(1),
+            nsfw: Some(false),
         }
     }
 }

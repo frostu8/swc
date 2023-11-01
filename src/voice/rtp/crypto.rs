@@ -40,9 +40,6 @@ enum EncryptorState {
 
 impl Encryptor {
     /// Creates a new encryptor from a secret key and an encryption mode.
-    ///
-    /// # Panics
-    /// Panics if `mode` is [`EncryptionMode::Other`].
     pub fn new(mode: EncryptionMode, secret_key: [u8; 32]) -> Encryptor {
         Encryptor {
             aead: XSalsa20Poly1305::new_from_slice(&secret_key)

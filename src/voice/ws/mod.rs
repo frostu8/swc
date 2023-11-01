@@ -1,11 +1,9 @@
-//! Voice connection things.
+//! Low-level websocket types and methods.
 
 pub mod error;
 pub mod payload;
-pub mod rtp;
 
 pub use error::Error;
-pub use rtp::{Packet as RtpPacket, Socket as RtpSocket};
 
 use error::{ApiError, ProtocolError};
 use payload::{
@@ -13,7 +11,7 @@ use payload::{
     Hello, Identify, Ready, Resume, SelectProtocol, SelectProtocolData,
     SessionDescription, Speaking,
 };
-use rtp::Encryptor;
+use super::rtp::{self, Socket, Encryptor};
 
 use tokio::net::UdpSocket;
 use tokio::time::{sleep_until, Duration, Instant};
@@ -33,7 +31,7 @@ use twilight_model::id::{
 /// Unmanaged voice connection to a websocket.
 ///
 /// This must be polled constantly to ensure heartbeats are sent. To poll the
-/// connection, call [`Connection::next`].
+/// connection, call [`Connection::recv`].
 pub struct Connection {
     session: Session,
     wss: WebSocketStream<ConnectStream>,
@@ -42,7 +40,10 @@ pub struct Connection {
 
 impl Connection {
     /// Establishes a connection to an endpoint.
-    pub async fn connect(session: Session) -> Result<(Connection, RtpSocket), Error> {
+    ///
+    /// Returns the websocket connection and the UDP connection used to send
+    /// Opus frames.
+    pub async fn connect(session: Session) -> Result<(Connection, Socket), Error> {
         let (wss, _response) = connect_async(format!("wss://{}/?v=4", session.endpoint)).await?;
 
         let mut conn = Connection {
@@ -82,6 +83,9 @@ impl Connection {
                         }
                         Some(Ok(ev)) => {
                             warn!("skipping ev: {:?}", ev);
+                        }
+                        Some(Err(Error::Protocol(err))) => {
+                            warn!("ignoring protocol error: {}", err);
                         }
                         Some(Err(err)) if err.can_resume() => {
                             match self.resume().await {
@@ -125,11 +129,11 @@ impl Connection {
         &self.session
     }
 
-    /// Completes a handshake with the voice server. See [discord's docs][1] for
-    /// more information.
+    /// Completes a handshake with the voice server. See [discord's docs][1]
+    /// for more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-    async fn handshake(&mut self) -> Result<RtpSocket, Error> {
+    async fn handshake(&mut self) -> Result<Socket, Error> {
         debug!("begin websocket handshake");
 
         send(
@@ -165,6 +169,9 @@ impl Connection {
                 }
                 Ok(ev) => {
                     warn!("unexpected event: {:?}", ev);
+                }
+                Err(Error::Protocol(err)) => {
+                    warn!("ignoring protocol error: {}", err);
                 }
                 Err(err) => {
                     error!("ws error: {}", err);
@@ -235,6 +242,9 @@ impl Connection {
                 Ok(ev) => {
                     warn!("unexpected event: {:?}", ev);
                 }
+                Err(Error::Protocol(err)) => {
+                    warn!("ignoring protocol error: {}", err);
+                }
                 Err(err) => {
                     error!("ws error: {}", err);
                     return Err(err);
@@ -246,7 +256,7 @@ impl Connection {
 
         info!("voice connected to {}", self.session.endpoint);
 
-        Ok(RtpSocket::new(
+        Ok(Socket::new(
             udp,
             ready.ssrc,
             Encryptor::new(encryptor_mode, desc.secret_key),

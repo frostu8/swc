@@ -1,8 +1,10 @@
 //! Low-level RTP protocol types.
 
+pub mod error;
 mod crypto;
 
 pub use crypto::{EncryptionMode, Encryptor};
+pub use error::Error;
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::net::{AddrParseError, IpAddr, SocketAddr};
@@ -10,7 +12,7 @@ use std::str::Utf8Error;
 
 use tokio::net::UdpSocket;
 
-use super::super::constants::{MONO_FRAME_SIZE, VOICE_PACKET_MAX};
+use super::constants::{MONO_FRAME_SIZE, VOICE_PACKET_MAX};
 
 use xsalsa20poly1305::TAG_SIZE;
 
@@ -40,7 +42,7 @@ impl Socket {
     /// Sends a packet over the socket, filling in its metadata and then
     /// encrypting it.
     #[inline]
-    pub async fn send<T>(&mut self, packet: &mut Packet<T>) -> Result<(), anyhow::Error>
+    pub async fn send<T>(&mut self, packet: &mut Packet<T>) -> Result<(), Error>
     where
         T: AsRef<[u8]> + AsMut<[u8]>,
     {
@@ -56,12 +58,10 @@ impl Socket {
         self.timestamp = self.timestamp.overflowing_add(MONO_FRAME_SIZE as u32).0;
 
         // encrypt packet
-        self.encryptor
-            .encrypt(packet)
-            .map_err(|_| anyhow::anyhow!("failed to encrypt packet"))?;
+        self.encryptor.encrypt(packet).map_err(Error::Encrypt)?;
 
         // send packet
-        self.udp.send(packet.as_ref()).await?;
+        self.udp.send(packet.as_ref()).await.map_err(Error::Io)?;
 
         Ok(())
     }
