@@ -20,7 +20,7 @@ use tokio::sync::{
 
 use super::voice::{self, Player};
 
-use twilight_gateway::Cluster;
+use twilight_gateway::MessageSender as GatewayMessageSender;
 use twilight_http::Client as HttpClient;
 use twilight_cache_inmemory::InMemoryCache;
 use twilight_model::{
@@ -36,7 +36,7 @@ use tokio::sync::RwLock;
 
 /// A music server is a shardable server for music queues.
 pub struct QueueServer {
-    gateway: Arc<Cluster>,
+    gateway: GatewayMessageSender,
     cache: Arc<InMemoryCache>,
     http_client: Arc<HttpClient>,
 
@@ -47,7 +47,7 @@ pub struct QueueServer {
 impl QueueServer {
     /// Creates a new `QueueServer`.
     pub fn new(
-        gateway: Arc<Cluster>,
+        gateway: GatewayMessageSender,
         cache: Arc<InMemoryCache>,
         http_client: Arc<HttpClient>,
 
@@ -111,6 +111,9 @@ impl QueueServer {
 
         f(&new_queue);
 
+        // DROP THE FUCKING RWLOCK GUARD, THIS CAUSES A DEADLOCK.
+        drop(queues);
+
         // add to map
         let mut queues = self.queues.write().await;
         queues.insert(guild_id, new_queue);
@@ -124,6 +127,7 @@ struct Queue {
     gateway_tx: UnboundedSender<GatewayEvent>,
 }
 
+#[derive(Debug)]
 enum GatewayEvent {
     VoiceStateUpdate(Box<VoiceStateUpdate>),
     VoiceServerUpdate(VoiceServerUpdate),
@@ -234,7 +238,7 @@ impl QueueState {
             // rust is kind of weird, but I might just be stupid
             std::mem::drop(voice_state);
             // there is no player
-            self.start_player_in().await;
+            self.start_player().await;
         }
 
         // a player is definitely running now, send voice state event
@@ -242,14 +246,12 @@ impl QueueState {
         self.queue_server
             .gateway
             .command(
-                0,
                 &UpdateVoiceState::new(self.guild_id, channel_id, false, false),
             )
-            .await
             .unwrap();
     }
 
-    async fn start_player_in(&mut self) {
+    async fn start_player(&mut self) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let player = Player::new(
@@ -275,16 +277,20 @@ async fn queue_run(mut state: QueueState) {
                 state.handle_command(command).await;
             }
             // gateway event
-            Some(event) = state.gateway_rx.recv(), if state.player.is_some() => {
-                let PlayerState { player, .. } = state.player.as_mut().unwrap();
+            Some(event) = state.gateway_rx.recv() => {
+                debug!("{:?}", event);
 
-                let _ = match event {
-                    GatewayEvent::VoiceStateUpdate(ev) => player.voice_state_update(ev),
-                    GatewayEvent::VoiceServerUpdate(ev) => player.voice_server_update(ev),
-                };
+                if let Some(PlayerState { player, .. }) = state.player.as_mut() {
+                    let _ = match event {
+                        GatewayEvent::VoiceStateUpdate(ev) => player.voice_state_update(ev),
+                        GatewayEvent::VoiceServerUpdate(ev) => player.voice_server_update(ev),
+                    };
+                }
             },
             // low level voice event
             Some(event) = voice_event(state.player.as_mut()) => {
+                debug!("{:?}", event);
+
                 match event.kind {
                     voice::EventType::Ready => {
                     }

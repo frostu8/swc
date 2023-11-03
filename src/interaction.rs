@@ -1,155 +1,82 @@
-//! Interaction utilities.
+//! Simple interaction helpers.
 
-use twilight_model::{
-    http::interaction::{InteractionResponse, InteractionResponseType, InteractionResponseData},
-    channel::message::{Embed, MessageFlags},
-    id::{Id, marker::{InteractionMarker}},
+use twilight_model::application::interaction::{
+    application_command::{CommandDataOption, CommandOptionValue},
 };
 
-use twilight_http::{
-    request::application::interaction::CreateResponse, client::InteractionClient,
-    response::{ResponseFuture, marker::EmptyBody},
-    Error,
-};
-
-use std::fmt::Display;
-use std::future::IntoFuture;
-
-/// Extension methods for Twilight's interaction client.
-pub trait ResponseExt {
-    /// Creates a [`Response`] for an interaction.
-    fn respond<'a>(&'a self, id: Id<InteractionMarker>, token: &'a str) -> Response<'a>;
-
-    /// Acknowledges an interaction.
-    fn ack(&self, id: Id<InteractionMarker>, token: &str) -> ResponseFuture<EmptyBody>;
+pub mod ext {
+    pub use super::CommandOptionValueCastExt;
+    pub use super::CommandOptionValueListCastExt;
 }
 
-impl<'c> ResponseExt for InteractionClient<'c> {
-    fn respond<'a>(
-        &'a self,
-        id: Id<InteractionMarker>,
-        token: &'a str,
-    ) -> Response<'a> {
-        Response {
-            client: self,
-            id,
-            token,
-
-            data: Default::default(),
-        }
-    }
-
-    fn ack(
-        &self,
-        id: Id<InteractionMarker>,
-        token: &str,
-    ) -> ResponseFuture<EmptyBody> {
-        self
-            .create_response(
-                id,
-                &token,
-                &InteractionResponse {
-                    kind: InteractionResponseType::DeferredChannelMessageWithSource,
-                    data: None,
-                },
-            )
-            .into_future()
-    }
-}
-
-/// A response builder for an interaction.
+/// Cast extension methods for interaction options.
 ///
-/// Provides shorthands for commonly used types.
-pub struct Response<'a> {
-    client: &'a InteractionClient<'a>,
-    id: Id<InteractionMarker>,
-    token: &'a str,
-
-    data: InteractionResponseData,
-}
-
-impl<'a> Response<'a> {
-    /// Responds with some content.
-    pub fn content<T>(self, content: T) -> Response<'a>
+/// We always know the schema of our commands, so this helper method
+/// significantly cuts down the boilerplate.
+pub trait CommandOptionValueCastExt: Sized {
+    /// Casts the value to a type.
+    ///
+    /// Returns `Ok(T)` if the type is successfully casted, otherwise
+    /// `Err(CastError)`.
+    fn cast<'a, T>(&'a self) -> Result<T, CastError>
     where
-        T: ToString
-    {
-        Response {
-            client: self.client,
-            id: self.id,
-            token: self.token,
-            data: InteractionResponseData {
-                content: Some(content.to_string()),
-                ..self.data
-            },
-        }
-    }
+        T: CommandOptionType<'a>;
+}
 
-    /// Responds with an embed.
-    pub fn embed(self, embed: Embed) -> Response<'a> {
-        Response {
-            client: self.client,
-            id: self.id,
-            token: self.token,
-            data: InteractionResponseData {
-                embeds: Some(vec![embed]),
-                ..self.data
-            },
-        }
-    }
-
-    /// Marks the message as "ephemeral."
-    pub fn ephemeral(self) -> Response<'a> {
-        Response {
-            client: self.client,
-            id: self.id,
-            token: self.token,
-            data: InteractionResponseData {
-                flags: Some(MessageFlags::EPHEMERAL),
-                ..self.data
-            },
-        }
-    }
-
-    /// Responds with a standardized error error message.
-    pub fn error<T>(self, err: T) -> Response<'a>
+impl CommandOptionValueCastExt for CommandDataOption {
+    fn cast<'a, T>(&'a self) -> Result<T, CastError>
     where
-        T: Display
+        T: CommandOptionType<'a>
     {
-        self
-            .content(format!("error:\n{}", err))
-            .ephemeral()
-    }
-
-    /// Updates an already sent response.
-    pub async fn update(self) -> Result<(), Error> {
-        self
-            .client
-            .update_response(&self.token)
-            .content(self.data.content.as_ref().map(|x| &**x))
-            .unwrap()
-            .embeds(self.data.embeds.as_ref().map(|x| &x[..]))
-            .unwrap()
-            .await
-            .map(|_| ())
+        T::cast_from(&self.value)
     }
 }
 
-impl<'a> IntoFuture for Response<'a> {
-    type Output = <CreateResponse<'a> as IntoFuture>::Output;
-    type IntoFuture = <CreateResponse<'a> as IntoFuture>::IntoFuture;
+/// Cast extension methods for lists of interaction options.
+///
+/// See [`CommandOptionValueCastExt`].
+pub trait CommandOptionValueListCastExt: Sized {
+    /// Casts the value at index `idx` to a type.
+    ///
+    /// Returns `Ok(T)` if the type is successfully casted, otherwise
+    /// `Err(CastError)` if the cast failed or the index is out of bounds.
+    fn cast<'a, T>(&'a self, idx: usize) -> Result<T, CastError>
+    where
+        T: CommandOptionType<'a>;
+}
 
-    fn into_future(self) -> Self::IntoFuture {
-        self
-            .client
-            .create_response(
-                self.id,
-                self.token,
-                &InteractionResponse {
-                    kind: InteractionResponseType::ChannelMessageWithSource,
-                    data: Some(self.data),
-                },
-            )
-            .into_future()
+impl CommandOptionValueListCastExt for Vec<CommandDataOption> {
+    fn cast<'a, T>(&'a self, idx: usize) -> Result<T, CastError>
+    where
+        T: CommandOptionType<'a>
+    {
+        self.get(idx).ok_or(CastError).and_then(|s| s.cast())
     }
 }
+
+/// A type that a [`CommandOptionValue`] can be.
+pub trait CommandOptionType<'a>: Sized {
+    fn cast_from(value: &'a CommandOptionValue) -> Result<Self, CastError>;
+}
+
+impl<'a> CommandOptionType<'a> for &'a str {
+    fn cast_from(value: &'a CommandOptionValue) -> Result<&'a str, CastError> {
+        match value {
+            CommandOptionValue::String(data) => Ok(data),
+            _ => Err(CastError),
+        }
+    }
+}
+
+impl<'a> CommandOptionType<'a> for String {
+    fn cast_from(value: &'a CommandOptionValue) -> Result<String, CastError> {
+        match value {
+            CommandOptionValue::String(data) => Ok(data.clone()),
+            _ => Err(CastError),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CastError;
+

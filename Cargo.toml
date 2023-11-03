@@ -5,10 +5,10 @@ authors = ["frostu8 <frostu8@protonmail.com>"]
 edition = "2021"
 
 [dependencies]
-twilight-model = "0.14"
-twilight-http = "0.14"
-twilight-gateway = "0.14"
-twilight-cache-inmemory = "0.14"
+twilight-model = "0.15"
+twilight-http = "0.15"
+twilight-gateway = "0.15"
+twilight-cache-inmemory = "0.15"
 tokio = { version = "1.21", features = ["rt", "rt-multi-thread", "macros", "process", "io-std"] }
 async-tungstenite = { version = "0.17", features = ["tokio-runtime", "tokio-rustls-native-certs"] }
 tungstenite = "0.17"
@@ -23,5 +23,4 @@ bytemuck = "1.12"
 dotenv = "0.15"
 log = "0.4"
 env_logger = "0.9"
-anyhow = "1.0"
 rand = "0.8"

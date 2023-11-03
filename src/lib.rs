@@ -6,68 +6,83 @@
 extern crate log;
 
 //pub mod player;
-//pub mod interaction;
+pub mod interaction;
 pub mod music;
 pub mod voice;
 
 use twilight_model::application::command::{Command, CommandType, CommandOption, CommandOptionType};
 use twilight_model::id::Id;
 
-macro_rules! command {
-    ($name:literal, $desc:literal, $($options:expr),* $(,)*) => {
-        Command {
-            application_id: None,
-            default_member_permissions: None,
-            dm_permission: None,
-            description: String::from($desc),
-            description_localizations: None,
-            guild_id: None,
-            id: None,
-            kind: CommandType::ChatInput,
-            name: String::from($name),
-            name_localizations: None,
-            options: vec![$($options),*],
-            version: Id::new(1),
-            nsfw: Some(false),
-        }
+/// Returns a chat command with a name and description.
+///
+/// This makes for easy autocompletion with struct flattening:
+/// ```
+/// # use twilight_model::application::command::Command;
+/// let command = Command {
+///     options: vec![
+///         command_option(
+///             CommandOptionType::String,
+///             "track",
+///             "the track to play",
+///         )
+///     ],
+///     ..command("play", "plays a track"),
+/// }
+/// ```
+pub fn command(
+    name: impl Into<String>,
+    description: impl Into<String>,
+) -> Command {
+    Command {
+        application_id: None,
+        default_member_permissions: None,
+        dm_permission: None,
+        description: description.into(),
+        description_localizations: None,
+        guild_id: None,
+        id: None,
+        kind: CommandType::ChatInput,
+        name: name.into(),
+        name_localizations: None,
+        options: Vec::new(),
+        version: Id::new(1),
+        nsfw: Some(false),
     }
 }
 
-macro_rules! option {
-    ($ty:expr, $name:literal, $desc:literal) => {
-        option!($ty, $name, $desc, required: false)
-    };
-    ($ty:expr, $name:literal, $desc:literal, required: $required:literal) => {
-        CommandOption {
-            autocomplete: None,
-            channel_types: None,
-            choices: None,
-            description: String::from($desc),
-            description_localizations: None,
-            kind: $ty,
-            max_length: None,
-            max_value: None,
-            min_length: None,
-            min_value: None,
-            name: String::from($name),
-            name_localizations: None,
-            options: None,
-            required: Some($required),
-        }
+/// Creates a new, **required** command option.
+pub fn command_option(
+    kind: CommandOptionType,
+    name: impl Into<String>,
+    description: impl Into<String>,
+) -> CommandOption {
+    CommandOption {
+        autocomplete: None,
+        channel_types: None,
+        choices: None,
+        description: description.into(),
+        description_localizations: None,
+        kind,
+        max_length: None,
+        max_value: None,
+        min_length: None,
+        min_value: None,
+        name: name.into(),
+        name_localizations: None,
+        options: None,
+        required: Some(true),
     }
 }
 
 /// Creates a list of commands the bot supports.
 pub fn commands() -> Vec<Command> {
     vec![
-        command!(
-            "play",
-            "play a music track",
-            option!(CommandOptionType::String, "url", "the url of the track", required: true),
-        ),
-        command!(
-            "skip",
-            "end the currently playing track and advance to the next",
-        ),
+        Command {
+            options: vec![
+                command_option(CommandOptionType::String, "query", "the url or query of the track"),
+            ],
+            ..command("play", "play a music track")
+        },
+        command("skip", "skips the currently playing song")
     ]
 }

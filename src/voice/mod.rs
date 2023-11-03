@@ -265,11 +265,13 @@ impl Player {
 pub struct PlayerClosed;
 
 /// An event that a [`Player`] can produce.
+#[derive(Debug)]
 pub struct Event {
     pub guild_id: Id<GuildMarker>,
     pub kind: EventType,
 }
 
+#[derive(Debug)]
 pub enum EventType {
     /// The player is ready to play a sound.
     Ready,
