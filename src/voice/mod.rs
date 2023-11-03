@@ -101,6 +101,7 @@ use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use rtp::Socket;
 use ws::{payload::Speaking, Connection, Session};
 
+use tokio::task::JoinHandle;
 use tokio::sync::{
     RwLock, RwLockReadGuard,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -119,6 +120,8 @@ use twilight_model::{
 ///
 /// [1]: crate::voice
 pub struct Player {
+    task: JoinHandle<()>,
+
     state: Arc<PlayerState>,
     gateway_tx: UnboundedSender<GatewayEvent>,
     command_tx: UnboundedSender<Command>,
@@ -128,17 +131,33 @@ impl Player {
     /// Creates a new `Player`.
     ///
     /// You typically shouldn't need to manually construct this.
-    pub async fn new(
+    pub fn new(
         user_id: impl Into<Id<UserMarker>>,
         guild_id: impl Into<Id<GuildMarker>>,
         event_tx: UnboundedSender<Event>,
-        initial_state: VoiceState,
     ) -> Player {
         let user_id = user_id.into();
         let guild_id = guild_id.into();
 
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+
+        // TODO: initial state?
+        let initial_state = VoiceState {
+            channel_id: None,
+            guild_id: Some(guild_id),
+            user_id: user_id,
+            deaf: false,
+            mute: false,
+            self_deaf: false,
+            self_mute: false,
+            self_stream: false,
+            self_video: false,
+            suppress: false,
+            session_id: String::new(),
+            member: None,
+            request_to_speak_timestamp: None,
+        };
 
         let state = Arc::new(PlayerState {
             user_id,
@@ -150,7 +169,7 @@ impl Player {
         let state_clone = state.clone();
 
         // start player task
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let task = PlayerTask::new(
                 state_clone,
                 event_tx,
@@ -165,10 +184,16 @@ impl Player {
         });
 
         Player {
+            task,
             gateway_tx,
             command_tx,
             state,
         }
+    }
+
+    /// Checks if the player is closed or dead.
+    pub fn is_closed(&self) -> bool {
+        self.task.is_finished()
     }
 
     /// Plays a new source.
@@ -211,7 +236,11 @@ impl Player {
 
     /// Gets the voice state of the player.
     pub async fn voice_state(&self) -> Result<RwLockReadGuard<VoiceState>, PlayerClosed> {
-        Ok(self.state.voice_state.read().await)
+        if self.is_closed() {
+            Err(PlayerClosed)
+        } else {
+            Ok(self.state.voice_state.read().await)
+        }
     }
 
     /// Sends a voice state update event to the player.
@@ -232,6 +261,7 @@ impl Player {
 }
 
 /// An error for when a player is closed.
+#[derive(Debug)]
 pub struct PlayerClosed;
 
 /// An event that a [`Player`] can produce.
@@ -371,7 +401,6 @@ impl PlayerTask {
     /// **Do not call this on the main thread, as it will not terminate.**
     pub async fn run(mut self) {
         if let Err(err) = self.run_inner().await {
-            error!("voice error: {}", err);
             let _ = self.event_tx.send(Event {
                 guild_id: self.state.guild_id,
                 kind: EventType::Error(err),

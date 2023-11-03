@@ -7,7 +7,7 @@ extern crate log;
 
 //pub mod player;
 //pub mod interaction;
-//pub mod music;
+pub mod music;
 pub mod voice;
 
 use twilight_model::application::command::{Command, CommandType, CommandOption, CommandOptionType};
