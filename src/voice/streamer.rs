@@ -106,9 +106,20 @@ impl PacketStreamer {
                 // figure out. This isn't a garbage piece of hardware these
                 // things are running on.
                 //
+                // UPDATE: This doesn't occur on Windows builds running on
+                // native hardware. Is this an issue with WSL? Seems more
+                // likely that it's a problem with this distro of WSL, Arch.
+                // Does this make sense? Actually, weirdly enough, yes, it kind
+                // of does. I never trusted the monotonic clock on this
+                // platform. It also explains why Nostrum was running audio
+                // fast, contrary to my original assumption (that Elixir was
+                // slow, which it is, but not slow enough that it messes with
+                // Opus passthrough).
+                //
+                // It is little inconsistencies like this that remind me that
+                // WSL will never be a perfect emulaion of Linux.
                 self.next_packet = self.next_packet + TIMESTEP_LENGTH;
                 //self.next_packet = self.next_packet + TIMESTEP_LENGTH + Duration::from_micros(1450);
-                //self.next_packet = now + TIMESTEP_LENGTH;
                 self.ready = false;
             } else {
                 if let Some(status) = self.next(rtp.ssrc()).await? {
