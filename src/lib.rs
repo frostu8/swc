@@ -1,7 +1,5 @@
 //! Soundwave command library.
 
-#![feature(never_type)]
-
 #[macro_use]
 extern crate log;
 
