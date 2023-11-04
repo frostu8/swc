@@ -53,5 +53,3 @@ jobs:
         procfile: "worker: ./swc"
         # buildpack is like environment used to run the app
         buildpack: "https://github.com/ph3nx/heroku-binary-buildpack.git"
-      env:
-        DISCORD_TOKEN: ${{secrets.DISCORD_TOKEN}}
