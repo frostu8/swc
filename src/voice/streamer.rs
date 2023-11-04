@@ -106,8 +106,8 @@ impl PacketStreamer {
                 // figure out. This isn't a garbage piece of hardware these
                 // things are running on.
                 //
-                //self.next_packet = self.next_packet + TIMESTEP_LENGTH;
-                self.next_packet = self.next_packet + TIMESTEP_LENGTH + Duration::from_micros(1450);
+                self.next_packet = self.next_packet + TIMESTEP_LENGTH;
+                //self.next_packet = self.next_packet + TIMESTEP_LENGTH + Duration::from_micros(1450);
                 //self.next_packet = now + TIMESTEP_LENGTH;
                 self.ready = false;
             } else {
