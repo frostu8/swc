@@ -9,6 +9,7 @@ extern crate log;
 pub mod interaction;
 pub mod music;
 pub mod voice;
+pub mod ytdl;
 
 use twilight_model::application::command::{Command, CommandType, CommandOption, CommandOptionType};
 use twilight_model::id::Id;

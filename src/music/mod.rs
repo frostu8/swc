@@ -18,7 +18,9 @@ use tokio::sync::{
     mpsc::{self, UnboundedSender, UnboundedReceiver},
 };
 
-use super::voice::{self, Player};
+use super::voice::{self, Player, Source};
+
+use crate::ytdl::Query as YtdlQuery;
 
 use twilight_gateway::MessageSender as GatewayMessageSender;
 use twilight_http::Client as HttpClient;
@@ -182,7 +184,7 @@ impl QueueState {
         }
     }
 
-    pub async fn play<'a>(&mut self, command: &'a Command, _query: &'a str) {
+    pub async fn play<'a>(&mut self, command: &'a Command, query: &'a str) {
         let user_channel_id = self
             .queue_server
             .cache
@@ -213,6 +215,26 @@ impl QueueState {
                 .unwrap();
 
             return;
+        }
+
+        // get player
+        let PlayerState { player, .. } = self.player.as_ref().expect("audio player");
+
+        // TODO: the `Query::query` function is notoriously slow
+        let query = match YtdlQuery::query(query).await {
+            Ok(query) => query,
+            Err(err) => {
+                // TODO: report error to user
+                panic!("{}", err)
+            }
+        };
+
+        match query {
+            YtdlQuery::Track(track) => {
+                // TODO: queue
+                // for now, place the song directly on the player
+                player.play(Source::ytdl(&track.url).unwrap()).unwrap();
+            }
         }
     }
 

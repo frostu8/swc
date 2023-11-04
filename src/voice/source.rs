@@ -6,10 +6,12 @@
 //! These should not be doing any super heavy CPU-bound work, as this runs on
 //! the player thread. All of these features are cancel-safe.
 
-use super::constants::{SAMPLE_RATE, STEREO_FRAME_SIZE};
+use super::constants::{DEFAULT_BITRATE, SAMPLE_RATE, STEREO_FRAME_SIZE};
+
+use crate::ytdl::YtdlError;
 
 use tokio::process::{Child, Command};
-use tokio::io::{AsyncRead, AsyncReadExt, BufReader, AsyncBufReadExt};
+use tokio::io::AsyncReadExt;
 
 use std::process::Stdio;
 use std::fmt::{self, Display, Formatter};
@@ -121,10 +123,17 @@ impl Source {
             .spawn()
             .map_err(Error::Io)?;
 
+        let mut coder = Encoder::new(
+            SAMPLE_RATE as u32,
+            Channels::Stereo,
+            Application::Audio,
+        ).map_err(Error::Codec)?;
+        coder.set_bitrate(DEFAULT_BITRATE).map_err(Error::Codec)?;
+
         Ok(Source {
             piped: Some(piped),
             ffmpeg,
-            coder: Encoder::new(SAMPLE_RATE as u32, Channels::Stereo, Application::Audio).map_err(Error::Codec)?,
+            coder,
             buf: [0f32; STEREO_FRAME_SIZE],
             buf_len: 0,
         })
@@ -132,7 +141,7 @@ impl Source {
 
     /// Creates a new `Source` from a `ytdl` query.
     pub fn ytdl(query: &str) -> Result<Source, Error> {
-        let ytdl = Command::new("youtube-dl")
+        let ytdl = Command::new(crate::ytdl::ytdl_executable())
             .args(&[
                 "-f",
                 "webm[abr>0]/bestaudio/best",
@@ -182,54 +191,4 @@ impl std::error::Error for Error {
         }
     }
 }
-
-/// An error from a `youtube-dl` command.
-#[derive(Debug)]
-pub struct YtdlError {
-    message: String,
-}
-
-impl YtdlError {
-    /// Reads an error from a stream.
-    ///
-    /// If an error is not found, returns `None`.
-    ///
-    /// `youtube-dl` error codes are meaningless, so this is the only way we can
-    /// get a message from `youtube-dl`.
-    pub async fn from_ytdl<T>(stream: T) -> Result<Option<YtdlError>, std::io::Error>
-    where
-        T: AsyncRead + Unpin,
-    {
-        // youtube-dl stderr looks like this:
-        // WARNING: warning
-        // ERROR: error <-- this is what we want
-        const ERROR_PREFIX: &'static str = "ERROR:";
-
-        let stream = BufReader::new(stream);
-
-        let mut lines = stream.lines();
-        while let Some(line) = lines.next_line().await? {
-            if line.starts_with(ERROR_PREFIX) {
-                return Ok(Some(YtdlError {
-                    message: line[ERROR_PREFIX.len()..].trim().to_owned(),
-                }));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// The message of the error.
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-impl Display for YtdlError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for YtdlError {}
 

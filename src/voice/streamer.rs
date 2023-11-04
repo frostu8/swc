@@ -78,10 +78,42 @@ impl PacketStreamer {
 
                 // setup for next packet
                 self.packet = Packet::default();
-                self.next_packet = self.next_packet + TIMESTEP_LENGTH;
+                // TODO: For reasons far beyond my reasoning or comprehension,
+                // the normal timestep for sending packets of, y'know, 20ms,
+                // makes the Opus audio run fast, just fast enough to create
+                // artifacts that skip frames and audibly alter the tempo. I
+                // don't know why it does this, especially because all of the
+                // constants were stolen from `songbird`, a valid and tested
+                // implementation.
+                //
+                // Apparently, it does have something to do with the tempo.
+                // Adding a timestep offset of 1450 microseconds seems to fix
+                // the audio just enough so that someone has to be looking for
+                // the tempo changes in the songs to actively notice it. This
+                // is fine. I don't know why it does this, and why the machine
+                // specifically chose a number between 1400 and 1600
+                // microseconds, but it works and I will leave it at that for
+                // now.
+                //
+                // This is no way related to cumulative delays in the runtime,
+                // because if it was, it would most likely arise as audio
+                // paced *slower*, not *faster*. Also, because these are fixed
+                // lengths of time, cumulative delays from slow packet encoding
+                // would eventually bubble over in the `next_from_source`
+                // function. None of this happens. And *no*, this has nothing
+                // to do with the fact that CPU-bound work is running in an
+                // async context, I will wait until that becomes a problem to
+                // figure out. This isn't a garbage piece of hardware these
+                // things are running on.
+                //
+                //self.next_packet = self.next_packet + TIMESTEP_LENGTH;
+                self.next_packet = self.next_packet + TIMESTEP_LENGTH + Duration::from_micros(1450);
+                //self.next_packet = now + TIMESTEP_LENGTH;
                 self.ready = false;
             } else {
-                self.next(rtp.ssrc()).await?;
+                if let Some(status) = self.next(rtp.ssrc()).await? {
+                    return Ok(status);
+                }
             }
         }
     }
@@ -111,9 +143,9 @@ impl PacketStreamer {
             }
         } else {
             // get from source
-            self.next_from_source(ssrc).await?;
+            let status = self.next_from_source(ssrc).await?;
 
-            Ok(None)
+            Ok(status)
         }
     }
 
@@ -168,7 +200,7 @@ impl PacketStreamer {
         // if the source is finally returning, we can send a start signal
         if end_wait {
             // reset interval so we can stream the packets
-            self.next_packet = Instant::now();
+            self.next_packet = Instant::now() + TIMESTEP_LENGTH;
             self.waiting_for_source = false;
 
             Ok(Some(Status::Started(ssrc)))

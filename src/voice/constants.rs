@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use opus::Bitrate;
+
 // Many of these constants were stolen from:
 // https://github.com/serenity-rs/songbird/blob/a2f55b7a35539c00e3a75edfb01d1777e8b19741/src/constants.rs
 
@@ -25,6 +27,9 @@ pub const MONO_FRAME_BYTE_SIZE: usize = MONO_FRAME_SIZE * std::mem::size_of::<f3
 
 /// Number of bytes in one complete frame of raw `f32`-encoded stereo audio.
 pub const STEREO_FRAME_BYTE_SIZE: usize = STEREO_FRAME_SIZE * std::mem::size_of::<f32>();
+
+/// Default bitrate for Opus coding.
+pub const DEFAULT_BITRATE: Bitrate = Bitrate::Bits(128_000);
 
 /// Maximum packet size for a voice packet.
 ///
