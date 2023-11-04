@@ -25,6 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         .parse_default_env()
         .init();
 
+    // init ytdl executable
+    swc::ytdl::init_ytdl_executable(|| {
+        env::var("YTDL_EXECUTABLE")
+            .unwrap_or_else(|_| String::from("youtube-dl"))
+    });
+
     // initialize discord shard
     // we only need one shard, but our infrastructure can be scaled up
     // relatively easily.

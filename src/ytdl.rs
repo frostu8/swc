@@ -5,14 +5,24 @@ use tokio::process::{Command};
 
 use std::process::Stdio;
 use std::fmt::{self, Display, Formatter};
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 
 //use crate::voice::{Source, source::Error as SourceError};
 
+static YTDL_EXECUTABLE: OnceLock<String> = OnceLock::new();
+
 /// The `youtube-dl` executable.
 pub fn ytdl_executable() -> &'static str {
-    "yt-dlp"
+    YTDL_EXECUTABLE.get().expect("ytdl executable initialized at startup")
+}
+
+pub fn init_ytdl_executable<F>(f: F) -> &'static str
+where
+    F: FnOnce() -> String
+{
+    YTDL_EXECUTABLE.get_or_init(f)
 }
 
 /// The result of a `youtube-dl` query.
