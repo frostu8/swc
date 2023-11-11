@@ -16,17 +16,18 @@ use twilight_model::id::Id;
 ///
 /// This makes for easy autocompletion with struct flattening:
 /// ```
-/// # use twilight_model::application::command::Command;
+/// # use twilight_model::application::command::{Command, CommandOptionType};
+/// # use swc::{command, command_option};
 /// let command = Command {
 ///     options: vec![
 ///         command_option(
 ///             CommandOptionType::String,
 ///             "track",
 ///             "the track to play",
-///         )
+///         ),
 ///     ],
-///     ..command("play", "plays a track"),
-/// }
+///     ..command("play", "plays a track")
+/// };
 /// ```
 pub fn command(
     name: impl Into<String>,
