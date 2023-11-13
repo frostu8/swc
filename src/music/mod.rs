@@ -6,8 +6,11 @@
 //! happens on the task. See [`Queue`] for more info.
 
 mod commands;
+mod query;
 
-pub use commands::{Action, Command};
+pub use commands::{Action, Command, CommandData};
+
+use query::{QueryQueue, QueryResult as QueryMessage};
 
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -20,7 +23,7 @@ use tokio::sync::{
 
 use super::voice::{self, Player, Source};
 
-use crate::ytdl::Query as YtdlQuery;
+use crate::ytdl::{Query as YtdlQuery, QueryError};
 
 use twilight_gateway::MessageSender as GatewayMessageSender;
 use twilight_http::Client as HttpClient;
@@ -146,6 +149,8 @@ impl Queue {
 
         // start task
         let task = tokio::spawn(queue_run(QueueState {
+            query_queue: QueryQueue::new(queue_server.http_client.clone()),
+
             queue_server,
             guild_id: guild_id.into(),
 
@@ -167,9 +172,12 @@ struct QueueState {
     guild_id: Id<GuildMarker>,
 
     player: Option<PlayerState>,
+    query_queue: QueryQueue<QueryResult>,
     command_rx: UnboundedReceiver<Command>,
     gateway_rx: UnboundedReceiver<GatewayEvent>,
 }
+
+type QueryResult = Result<YtdlQuery, QueryError>;
 
 struct PlayerState {
     player: Player,
@@ -178,13 +186,42 @@ struct PlayerState {
 
 impl QueueState {
     pub async fn handle_command(&mut self, command: Command) {
-        match &command.action {
-            Action::Play(track) => self.play(&command, track).await,
+        let Command { data, action } = command;
+
+        match action {
+            Action::Play(track) => {
+                self.ensure_voice(&data).await;
+
+                self.query_queue.enqueue(
+                    data,
+                    |_| async move {
+                        YtdlQuery::query(&track).await
+                    }
+                ).await;
+            },
             Action::Skip => todo!()
         }
     }
 
-    pub async fn play<'a>(&mut self, command: &'a Command, query: &'a str) {
+    pub async fn handle_query(&mut self, result: QueryMessage<QueryResult>) {
+        let QueryMessage {
+            data: command,
+            message,
+        } = result;
+
+        match message {
+            Ok(query) => self.play(&command, query).await,
+            Err(err) => {
+                let _ = command
+                    .respond(&self.queue_server.http_client)
+                    .error(format!("failed to query: {}", err))
+                    .update()
+                    .await;
+            }
+        }
+    }
+
+    pub async fn ensure_voice(&mut self, command: &CommandData) {
         let user_channel_id = self
             .queue_server
             .cache
@@ -198,6 +235,7 @@ impl QueueState {
                     .respond(&self.queue_server.http_client)
                     .error("you must be in the same voice channel as the bot\
                         to use this!")
+                    .respond()
                     .await
                     .unwrap();
 
@@ -211,29 +249,30 @@ impl QueueState {
             command
                 .respond(&self.queue_server.http_client)
                 .error("you must be in a voice channel to use this!")
+                .respond()
                 .await
                 .unwrap();
 
             return;
         }
+    }
 
+    pub async fn play<'a>(&mut self, command: &'a CommandData, query: YtdlQuery) {
         // get player
         let PlayerState { player, .. } = self.player.as_ref().expect("audio player");
-
-        // TODO: the `Query::query` function is notoriously slow
-        let query = match YtdlQuery::query(query).await {
-            Ok(query) => query,
-            Err(err) => {
-                // TODO: report error to user
-                panic!("{}", err)
-            }
-        };
 
         match query {
             YtdlQuery::Track(track) => {
                 // TODO: queue
                 // for now, place the song directly on the player
                 player.play(Source::ytdl(&track.url).unwrap()).unwrap();
+
+                // TODO: pretty embeds
+                let _ = command
+                    .respond(&self.queue_server.http_client)
+                    .content(format!("queued \"{}\"", track.title))
+                    .update()
+                    .await;
             }
         }
     }
@@ -258,9 +297,9 @@ impl QueueState {
             }
         } else {
             // rust is kind of weird, but I might just be stupid
-            std::mem::drop(voice_state);
+            drop(voice_state);
             // there is no player
-            self.start_player().await;
+            self.start_player();
         }
 
         // a player is definitely running now, send voice state event
@@ -273,7 +312,7 @@ impl QueueState {
             .unwrap();
     }
 
-    async fn start_player(&mut self) {
+    fn start_player(&mut self) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let player = Player::new(
@@ -297,6 +336,10 @@ async fn queue_run(mut state: QueueState) {
             // high level command
             Some(command) = state.command_rx.recv() => {
                 state.handle_command(command).await;
+            }
+            // high level queue event
+            message = state.query_queue.next() => {
+                state.handle_query(message).await;
             }
             // gateway event
             Some(event) = state.gateway_rx.recv() => {

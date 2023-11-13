@@ -1,6 +1,7 @@
 //! Commands that a user can input for a music queue.
 
 use std::fmt::Display;
+use std::ops::Deref;
 
 use twilight_http::{
     client::{Client as HttpClient, InteractionClient},
@@ -8,7 +9,7 @@ use twilight_http::{
     Error as HttpError,
 };
 use twilight_model::{
-    channel::message::MessageFlags,
+    channel::{message::MessageFlags, Message},
     http::interaction::{
         InteractionResponse, InteractionResponseType, InteractionResponseData,
     },
@@ -19,14 +20,18 @@ use twilight_model::{
 ///
 /// Holds information about the command and how to respond to it.
 pub struct Command {
+    pub data: CommandData,
+    pub action: Action,
+}
+
+/// The actual command data.
+pub struct CommandData {
     pub interaction_id: Id<InteractionMarker>,
     pub interaction_token: String,
 
     pub application_id: Id<ApplicationMarker>,
     pub guild_id: Id<GuildMarker>,
     pub user_id: Id<UserMarker>,
-
-    pub action: Action,
 }
 
 /// The action that a commands wants completed.
@@ -37,27 +42,81 @@ pub enum Action {
     Skip,
 }
 
-impl Command {
+impl CommandData {
     /// Begins a command response.
     pub fn respond<'a>(&'a self, client: &'a HttpClient) -> CommandResponse<'a> {
         CommandResponse {
             command: self,
             client: client.interaction(self.application_id),
+
+            content: None,
+            flags: MessageFlags::empty(),
         }
+    }
+}
+
+impl Deref for Command {
+    type Target = CommandData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
     }
 }
 
 /// A builder for a response to a command.
 pub struct CommandResponse<'a> {
-    command: &'a Command,
+    command: &'a CommandData,
     client: InteractionClient<'a>,
+
+    content: Option<String>,
+    flags: MessageFlags,
 }
 
 impl<'a> CommandResponse<'a> {
-    /// Responds with a quick, user-friendly error.
-    pub async fn error(&self, error: impl Display) -> Result<Response<EmptyBody>, HttpError> {
-        let error = error.to_string();
+    /// Sets the response as a quick, user friendly error.
+    pub fn error(&mut self, error: impl Display) -> &mut Self {
+        self.content = Some(error.to_string());
+        self.flags |= MessageFlags::EPHEMERAL;
 
+        self
+    }
+
+    /// Sets the content of the message.
+    pub fn content(&mut self, content: impl Display) -> &mut Self {
+        self.content = Some(content.to_string());
+
+        self
+    }
+
+    /// Acks the response.
+    /// 
+    /// The final message must be updated with [`CommandResponse::update`].
+    pub async fn ack(&mut self) -> Result<Response<EmptyBody>, HttpError> {
+        self
+            .client
+            .create_response(
+                self.command.interaction_id,
+                &self.command.interaction_token,
+                &InteractionResponse {
+                    kind: InteractionResponseType::DeferredChannelMessageWithSource,
+                    data: None,
+                },
+            )
+            .await
+    }
+
+    /// Updates the previous message (mostly an ACK).
+    pub async fn update(&mut self) -> Result<Response<Message>, HttpError> {
+        self
+            .client
+            .update_response(&self.command.interaction_token)
+            .content(self.content.as_deref())
+            .unwrap()
+            .await
+    }
+
+    /// Responds with a new message.
+    pub async fn respond(&mut self) -> Result<Response<EmptyBody>, HttpError> {
         self
             .client
             .create_response(
@@ -66,8 +125,8 @@ impl<'a> CommandResponse<'a> {
                 &InteractionResponse {
                     kind: InteractionResponseType::ChannelMessageWithSource,
                     data: Some(InteractionResponseData {
-                        flags: Some(MessageFlags::EPHEMERAL),
-                        content: Some(error),
+                        flags: Some(self.flags),
+                        content: self.content.take(),
                         ..Default::default()
                     }),
                 },

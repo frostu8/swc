@@ -123,11 +123,13 @@ async fn handle_command(
             queue_server.command(
                 guild_id,
                 music::Command {
-                    application_id: interaction.application_id,
-                    interaction_id: interaction.id,
-                    interaction_token: interaction.token,
-                    guild_id,
-                    user_id: user.id,
+                    data: music::CommandData {
+                        application_id: interaction.application_id,
+                        interaction_id: interaction.id,
+                        interaction_token: interaction.token,
+                        guild_id,
+                        user_id: user.id,
+                    },
                     action: music::Action::Play(query),
                 },
             ).await;
