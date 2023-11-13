@@ -7,6 +7,10 @@ use std::process::Stdio;
 use std::fmt::{self, Display, Formatter};
 use std::sync::OnceLock;
 
+use twilight_model::channel::message::embed::{
+    Embed, EmbedAuthor, EmbedThumbnail,
+};
+
 use serde::Deserialize;
 
 //use crate::voice::{Source, source::Error as SourceError};
@@ -84,24 +88,30 @@ impl Query {
         struct YtdlQuery {
             webpage_url: String,
             title: String,
-            //uploader: String,
-            /*
-            #[serde(default)]
-            thumbnail: Option<String>,
+            uploader: String,
             #[serde(default)]
             uploader_url: Option<String>,
-            */
+            #[serde(default)]
+            thumbnail: Option<String>,
         }
 
         let YtdlQuery {
             webpage_url,
             title,
+            uploader,
+            uploader_url,
+            thumbnail,
         } = serde_json::from_str(json).map_err(QueryError::Json)?;
 
         // create a track as the result
         let track = Track {
             url: webpage_url,
             title,
+            author: Author {
+                name: uploader,
+                url: uploader_url,
+            },
+            thumbnail_url: thumbnail,
         };
 
         Ok(Query::Track(track))
@@ -111,12 +121,61 @@ impl Query {
 /// A single `youtube-dl` track.
 ///
 /// Produced from the output of a `youtube-dl` query.
+#[derive(Clone)]
 pub struct Track {
     /// A url which, when provided to `youtube-dl` should produce the same
     /// result.
     pub url: String,
     /// A visible title for a song.
     pub title: String,
+    /// The author of the track.
+    pub author: Author,
+    /// The URL of the thumbnail of the track.
+    pub thumbnail_url: Option<String>,
+}
+
+impl Track {
+    /// Converts a `Track` to a readable embed.
+    pub fn as_embed(&self) -> Embed {
+        let Track { url, title, author, thumbnail_url, .. } = self.clone();
+
+        Embed {
+            author: Some(EmbedAuthor {
+                name: author.name,
+                url: author.url,
+                icon_url: None,
+                proxy_icon_url: None,
+            }),
+            // TODO: color
+            color: Some(0xEE1428),
+            description: None,
+            fields: Vec::new(),
+            footer: None,
+            image: None,
+            kind: String::from("rich"),
+            provider: None,
+            title: Some(title),
+            timestamp: None,
+            thumbnail: thumbnail_url
+                .map(|url| EmbedThumbnail {
+                    url: url,
+                    height: None,
+                    width: None,
+                    proxy_url: None,
+                }),
+            url: Some(url),
+            video: None,
+        }
+    }
+}
+
+/// An author of a track.
+#[derive(Clone)]
+pub struct Author {
+    /// The name of the author.
+    pub name: String,
+    /// A URL to the author's channel.
+    pub url: Option<String>,
 }
 
 /// An error that can occur querying `youtube-dl`.

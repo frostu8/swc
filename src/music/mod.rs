@@ -11,6 +11,7 @@ mod query;
 pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
+use twilight_model::channel::message::Embed;
 
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -267,10 +268,12 @@ impl QueueState {
                 // for now, place the song directly on the player
                 player.play(Source::ytdl(&track.url).unwrap()).unwrap();
 
-                // TODO: pretty embeds
                 let _ = command
                     .respond(&self.queue_server.http_client)
-                    .content(format!("queued \"{}\"", track.title))
+                    .embed(Embed {
+                        description: Some(String::from("enqueued track")),
+                        ..track.as_embed()
+                    })
                     .update()
                     .await;
             }

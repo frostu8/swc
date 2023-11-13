@@ -9,7 +9,7 @@ use twilight_http::{
     Error as HttpError,
 };
 use twilight_model::{
-    channel::{message::MessageFlags, Message},
+    channel::{message::{MessageFlags, Embed}, Message},
     http::interaction::{
         InteractionResponse, InteractionResponseType, InteractionResponseData,
     },
@@ -50,6 +50,7 @@ impl CommandData {
             client: client.interaction(self.application_id),
 
             content: None,
+            embeds: None,
             flags: MessageFlags::empty(),
         }
     }
@@ -69,6 +70,7 @@ pub struct CommandResponse<'a> {
     client: InteractionClient<'a>,
 
     content: Option<String>,
+    embeds: Option<Vec<Embed>>,
     flags: MessageFlags,
 }
 
@@ -84,6 +86,17 @@ impl<'a> CommandResponse<'a> {
     /// Sets the content of the message.
     pub fn content(&mut self, content: impl Display) -> &mut Self {
         self.content = Some(content.to_string());
+
+        self
+    }
+
+    /// Adds an embed to the response.
+    pub fn embed(&mut self, embed: Embed) -> &mut Self {
+        if self.embeds.is_none() {
+            self.embeds = Some(Vec::new());
+        }
+
+        self.embeds.as_mut().unwrap().push(embed);
 
         self
     }
@@ -112,6 +125,8 @@ impl<'a> CommandResponse<'a> {
             .update_response(&self.command.interaction_token)
             .content(self.content.as_deref())
             .unwrap()
+            .embeds(self.embeds.as_deref())
+            .unwrap()
             .await
     }
 
@@ -126,6 +141,7 @@ impl<'a> CommandResponse<'a> {
                     kind: InteractionResponseType::ChannelMessageWithSource,
                     data: Some(InteractionResponseData {
                         flags: Some(self.flags),
+                        embeds: self.embeds.take(),
                         content: self.content.take(),
                         ..Default::default()
                     }),
