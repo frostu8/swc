@@ -83,6 +83,7 @@ pub fn commands() -> Vec<Command> {
             ],
             ..command("play", "play a music track")
         },
-        command("skip", "skips the currently playing song")
+        command("skip", "skips the currently playing song"),
+        command("queue", "lists the current music queue"),
     ]
 }

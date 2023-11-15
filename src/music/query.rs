@@ -5,7 +5,6 @@
 use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
 
 use twilight_http::Client as HttpClient;
-use twilight_model::http;
 
 use std::future::Future;
 use std::sync::Arc;

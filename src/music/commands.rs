@@ -25,6 +25,7 @@ pub struct Command {
 }
 
 /// The actual command data.
+#[derive(Clone)]
 pub struct CommandData {
     pub interaction_id: Id<InteractionMarker>,
     pub interaction_token: String,
@@ -40,6 +41,8 @@ pub enum Action {
     Play(String),
     /// Skips the currently playing track.
     Skip,
+    /// Lists all of the tracks in a queue.
+    Queue,
 }
 
 impl CommandData {

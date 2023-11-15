@@ -1,7 +1,7 @@
 //! Types helpful for interacting with the youtube-dl command line.
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncBufRead, AsyncBufReadExt, BufReader};
-use tokio::process::{Command};
+use tokio::process::Command;
 
 use std::process::Stdio;
 use std::fmt::{self, Display, Formatter};
@@ -121,7 +121,7 @@ impl Query {
 /// A single `youtube-dl` track.
 ///
 /// Produced from the output of a `youtube-dl` query.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Track {
     /// A url which, when provided to `youtube-dl` should produce the same
     /// result.
@@ -170,7 +170,7 @@ impl Track {
 }
 
 /// An author of a track.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Author {
     /// The name of the author.
     pub name: String,

@@ -12,9 +12,11 @@ pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
 use twilight_model::channel::message::Embed;
+use twilight_model::channel::message::embed::EmbedThumbnail;
 
 use std::sync::Arc;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Display, Formatter};
 
 use tokio::task::JoinHandle;
 use tokio::sync::{
@@ -24,7 +26,7 @@ use tokio::sync::{
 
 use super::voice::{self, Player, Source};
 
-use crate::ytdl::{Query as YtdlQuery, QueryError};
+use crate::ytdl::{Query as YtdlQuery, Track, QueryError};
 
 use twilight_gateway::MessageSender as GatewayMessageSender;
 use twilight_http::Client as HttpClient;
@@ -158,6 +160,9 @@ impl Queue {
             player: None,
             command_rx,
             gateway_rx,
+
+            track_queue: VecDeque::default(),
+            playing: None,
         }));
 
         Queue {
@@ -176,6 +181,9 @@ struct QueueState {
     query_queue: QueryQueue<QueryResult>,
     command_rx: UnboundedReceiver<Command>,
     gateway_rx: UnboundedReceiver<GatewayEvent>,
+
+    track_queue: VecDeque<Track>,
+    playing: Option<Track>,
 }
 
 type QueryResult = Result<YtdlQuery, QueryError>;
@@ -189,18 +197,151 @@ impl QueueState {
     pub async fn handle_command(&mut self, command: Command) {
         let Command { data, action } = command;
 
-        match action {
-            Action::Play(track) => {
-                self.ensure_voice(&data).await;
+        let res = match action {
+            Action::Play(track) => self.play(&data, track).await,
+            Action::Skip => self.skip(&data).await,
+            Action::Queue => self.queue(&data).await,
+        };
 
-                self.query_queue.enqueue(
-                    data,
-                    |_| async move {
-                        YtdlQuery::query(&track).await
-                    }
-                ).await;
-            },
-            Action::Skip => todo!()
+        if let Err(err) = res {
+            let _ = data
+                .respond(&self.queue_server.http_client)
+                .error(err)
+                .respond()
+                .await;
+        }
+    }
+
+    async fn play(
+        &mut self,
+        command: &CommandData,
+        query: String,
+    ) -> Result<(), UserError> {
+        match self.check_user_in_channel(command.user_id).await {
+            // user is in the same channel
+            Ok(_) => (),
+            // join user's channel
+            Err(UserError::BotNotInChannel(channel_id)) => {
+                self.join(channel_id).await;
+            }
+            Err(err) => {
+                return Err(err);
+            }
+        }
+
+        self.query_queue.enqueue(
+            command.clone(),
+            |_| async move {
+                YtdlQuery::query(&query).await
+            }
+        ).await;
+
+        Ok(())
+    }
+
+    async fn skip(&mut self, command: &CommandData) -> Result<(), UserError> {
+        self.check_user_in_channel(command.user_id).await?;
+
+        self.skip_track();
+
+        if let Some(track) = self.track_queue.front() {
+            let _ = command
+                .respond(&self.queue_server.http_client)
+                .embed(Embed {
+                    description: Some(String::from("skipped track")),
+                    ..track.as_embed()
+                })
+                .respond()
+                .await;
+        } else {
+            let _ = command
+                .respond(&self.queue_server.http_client)
+                .content("skipped track, now playing nothing :(")
+                .respond()
+                .await;
+        }
+
+        Ok(())
+    }
+
+    async fn queue(&self, command: &CommandData) -> Result<(), UserError> {
+        let mut description = self
+            .playing
+            .as_ref()
+            .map(|track| format!("now playing [{}]({})", track.title, track.url))
+            .unwrap_or_else(|| String::from("nothing currently playing"));
+
+        // construct queue
+        for (i, track) in self.track_queue.iter().enumerate() {
+            description.push_str(&format!("\n{}. [{}]({})",
+                i + 1,
+                track.title,
+                track.url));
+        }
+
+        let embed = Embed {
+            author: None,
+            // TODO: color
+            color: Some(0xEE1428),
+            description: Some(description),
+            fields: Vec::new(),
+            footer: None,
+            image: None,
+            kind: String::from("rich"),
+            provider: None,
+            thumbnail: self
+                .playing
+                .as_ref()
+                .and_then(|playing| playing.thumbnail_url.clone())
+                .map(|url| EmbedThumbnail {
+                    url: url,
+                    height: None,
+                    width: None,
+                    proxy_url: None,
+                }),
+            timestamp: None,
+            title: None,
+            url: self
+                .playing
+                .as_ref()
+                .map(|playing| playing.url.clone()),
+            video: None,
+        };
+
+        let _ = command
+            .respond(&self.queue_server.http_client)
+            .embed(embed)
+            .respond()
+            .await;
+
+        Ok(())
+    }
+
+    /// Checks if a user can use a music control command.
+    /// 
+    /// A user can use a music control command if the user is in the same
+    /// channel as the bot.
+    async fn check_user_in_channel(
+        &self,
+        user_id: Id<UserMarker>,
+    ) -> Result<(), UserError>{
+        let user_channel_id = self
+            .queue_server
+            .cache
+            .voice_state(user_id, self.guild_id)
+            .map(|s| s.channel_id());
+
+        let voice_state = self.voice_state().await;
+        if let Some(voice_state) = voice_state {
+            if voice_state.channel_id == user_channel_id {
+                Ok(())
+            } else {
+                Err(UserError::UserInDifferentChannel)
+            }
+        } else if let Some(channel_id) = user_channel_id {
+            Err(UserError::BotNotInChannel(channel_id))
+        } else {
+            Err(UserError::UserNotInChannel)
         }
     }
 
@@ -211,7 +352,7 @@ impl QueueState {
         } = result;
 
         match message {
-            Ok(query) => self.play(&command, query).await,
+            Ok(query) => self.play_after_query(&command, query).await,
             Err(err) => {
                 let _ = command
                     .respond(&self.queue_server.http_client)
@@ -222,52 +363,10 @@ impl QueueState {
         }
     }
 
-    pub async fn ensure_voice(&mut self, command: &CommandData) {
-        let user_channel_id = self
-            .queue_server
-            .cache
-            .voice_state(command.user_id, self.guild_id)
-            .map(|s| s.channel_id());
-
-        let voice_state = self.voice_state().await;
-        if let Some(voice_state) = voice_state {
-            if voice_state.channel_id != user_channel_id {
-                command
-                    .respond(&self.queue_server.http_client)
-                    .error("you must be in the same voice channel as the bot\
-                        to use this!")
-                    .respond()
-                    .await
-                    .unwrap();
-
-                return;
-            }
-        } else if let Some(channel_id) = user_channel_id {
-            drop(voice_state);
-            // join user's channel
-            self.join(channel_id).await;
-        } else {
-            command
-                .respond(&self.queue_server.http_client)
-                .error("you must be in a voice channel to use this!")
-                .respond()
-                .await
-                .unwrap();
-
-            return;
-        }
-    }
-
-    pub async fn play<'a>(&mut self, command: &'a CommandData, query: YtdlQuery) {
-        // get player
-        let PlayerState { player, .. } = self.player.as_ref().expect("audio player");
-
+    /// Executes the final result of a play command and their query.
+    async fn play_after_query(&mut self, command: &CommandData, query: YtdlQuery) {
         match query {
             YtdlQuery::Track(track) => {
-                // TODO: queue
-                // for now, place the song directly on the player
-                player.play(Source::ytdl(&track.url).unwrap()).unwrap();
-
                 let _ = command
                     .respond(&self.queue_server.http_client)
                     .embed(Embed {
@@ -276,7 +375,54 @@ impl QueueState {
                     })
                     .update()
                     .await;
+
+                // enqueue track
+                self.place_track(track);
             }
+        }
+    }
+
+    /// Enqueues a track onto the player.
+    /// 
+    /// Starts playing the song immediately if there is no song playing.
+    /// Otherwise, enqueue the track on the queue.
+    pub fn place_track(&mut self, track: Track) {
+        if self.playing.is_none() {
+            // get player
+            let player = self.unwrap_player();
+
+            // play track immediately
+            player.play(Source::ytdl(&track.url).unwrap()).unwrap();
+
+            self.playing = Some(track);
+        } else {
+            // place track on queue
+            self.track_queue.push_back(track);
+        }
+    }
+
+    /// Skips the current track by stopping the player.
+    pub fn skip_track(&mut self) {
+        let Some(PlayerState { player, .. }) = self.player.as_ref() else {
+            return;
+        };
+
+        if player.playing() {
+            player.stop().unwrap();
+        }
+    }
+
+    /// Plays a new track onto the player.
+    pub fn next_track(&mut self) {
+        let Some(PlayerState { player, .. }) = self.player.as_ref() else {
+            return;
+        };
+
+        if let Some(track) = self.track_queue.pop_back() {
+            player.play(Source::ytdl(&track.url).unwrap()).unwrap();
+            self.playing = Some(track);
+        } else {
+            self.playing = None;
         }
     }
 
@@ -313,6 +459,15 @@ impl QueueState {
                 &UpdateVoiceState::new(self.guild_id, channel_id, false, false),
             )
             .unwrap();
+    }
+
+    fn unwrap_player(&self) -> &Player {
+        let PlayerState { player, .. } = self
+            .player
+            .as_ref()
+            .expect("audio player");
+
+        player
     }
 
     fn start_player(&mut self) {
@@ -365,7 +520,12 @@ async fn queue_run(mut state: QueueState) {
                     voice::EventType::Error(err) => {
                         error!("audio: {}", err);
                     }
-                    _ => ()
+                    voice::EventType::Playing => {
+                    }
+                    voice::EventType::Stopped => {
+                        // enqueue new track
+                        state.next_track();
+                    }
                 };
             }
         }
@@ -380,3 +540,28 @@ async fn voice_event(player: Option<&mut PlayerState>) -> Option<voice::Event> {
     }
 }
 
+#[derive(Debug)]
+enum UserError {
+    UserInDifferentChannel,
+    UserNotInChannel,
+    BotNotInChannel(Id<ChannelMarker>)
+}
+
+impl Display for UserError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            UserError::UserInDifferentChannel => f.write_str(
+                "you must be in the same voice channel as the bot to use \
+                    this!"
+            ),
+            UserError::UserNotInChannel => f.write_str(
+                "you must be in a voice channel to use this!"
+            ),
+            UserError::BotNotInChannel(_) => f.write_str(
+                "the bot must be in a voice channel to use this!"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for UserError {}

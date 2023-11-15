@@ -398,6 +398,22 @@ impl PlayerTask {
         })
     }
 
+    pub async fn set_playing(&mut self, playing: bool) {
+        if self.state.playing.fetch_xor(playing, Ordering::Acquire) {
+            self.state.playing.store(playing, Ordering::Release);
+            let kind = if playing {
+                EventType::Playing
+            } else {
+                EventType::Stopped
+            };
+
+            let _ = self.event_tx.send(Event {
+                guild_id: self.state.guild_id,
+                kind,
+            });
+        }
+    }
+
     /// Runs the task, consuming it.
     ///
     /// **Do not call this on the main thread, as it will not terminate.**
@@ -470,25 +486,14 @@ impl PlayerTask {
                             // start new source
                             //self.streamer.add_silence(5);
                             self.streamer.source(source);
-                            
-                            // TODO: wait for source to start actually
-                            // producing audio data before sending relevant
-                            // playing events
-
-                            //self.set_playing(true).await?;
-                            // send event
-                            let _ = self.event_tx.send(Event {
-                                guild_id: self.state.guild_id,
-                                kind: EventType::Playing,
-                            });
                         }
                         Some(Command::Pause) => {
                             //self.set_playing(false).await?;
                         }
                         Some(Command::Resume) => {
-                            if self.streamer.has_source() {
-                                //self.set_playing(true).await?;
-                            }
+                            //if self.streamer.has_source() {
+                            //    self.set_playing(true).await?;
+                            //}
                         }
                         Some(Command::Stop) => {
                             self.close_source().await?;
@@ -506,7 +511,8 @@ impl PlayerTask {
                                 ssrc,
                                 delay: Some(0),
                             })
-                            .await?
+                            .await?;
+                            self.set_playing(true).await;
                         }
                         Status::Stopped(ssrc) => {
                             self.ws.send(Speaking {
@@ -514,16 +520,10 @@ impl PlayerTask {
                                 ssrc,
                                 delay: Some(0),
                             })
-                            .await?
+                            .await?;
+                            self.set_playing(false).await;
                         }
                     }
-
-                    // TODO: send audio events
-                    /*
-                    let _ = self.event_tx.send(Event {
-                        guild_id: self.state.guild_id,
-                        kind: EventType::Stopped,
-                    });*/
                 }
             }
         }

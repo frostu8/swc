@@ -49,11 +49,6 @@ impl PacketStreamer {
         self.source = Some(source);
     }
 
-    /// Checks if a source is present in the streamer.
-    pub fn has_source(&self) -> bool {
-        self.source.is_some()
-    }
-
     /// Takes the inner [`Source`].
     pub fn take_source(&mut self) -> Option<Source> {
         self.wait_for_source();

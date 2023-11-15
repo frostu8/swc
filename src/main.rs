@@ -4,16 +4,15 @@ use std::{env, sync::Arc};
 use swc::music::{self, QueueServer};
 use swc::interaction::ext::*;
 
-use twilight_gateway::{Shard, ShardId, Intents, Config, EventTypeFlags};
+use twilight_gateway::{Shard, ShardId, Intents, Config};
 use twilight_http::client::Client;
 use twilight_cache_inmemory::InMemoryCache;
 use twilight_model::{
     id::Id,
     application::interaction::{
-        application_command::{CommandData, CommandOptionValue},
+        application_command::CommandData,
         Interaction, InteractionData,
     },
-    channel::message::Embed,
     gateway::event::Event, 
 };
 
@@ -111,6 +110,14 @@ async fn handle_command(
         return;
     };
 
+    let command_data = music::CommandData {
+        application_id: interaction.application_id,
+        interaction_id: interaction.id,
+        interaction_token: interaction.token,
+        guild_id,
+        user_id: user.id,
+    };
+
     match &*data.name {
         "play" => {
             // first argument is the query
@@ -123,19 +130,30 @@ async fn handle_command(
             queue_server.command(
                 guild_id,
                 music::Command {
-                    data: music::CommandData {
-                        application_id: interaction.application_id,
-                        interaction_id: interaction.id,
-                        interaction_token: interaction.token,
-                        guild_id,
-                        user_id: user.id,
-                    },
+                    data: command_data,
                     action: music::Action::Play(query),
                 },
             ).await;
         }
         "skip" => {
-            todo!()
+            // send to the queue
+            queue_server.command(
+                guild_id,
+                music::Command {
+                    data: command_data,
+                    action: music::Action::Skip,
+                },
+            ).await;
+        }
+        "queue" => {
+            // send to the queue
+            queue_server.command(
+                guild_id,
+                music::Command {
+                    data: command_data,
+                    action: music::Action::Queue,
+                },
+            ).await;
         }
         // ignore missing commands
         _ => (),
