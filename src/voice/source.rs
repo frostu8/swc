@@ -14,7 +14,7 @@ use tokio::process::{Child, Command};
 use tokio::io::AsyncReadExt;
 
 use std::process::Stdio;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
 use opus::{Application, Encoder, Channels};
 
@@ -158,6 +158,12 @@ impl Source {
             .map_err(Error::Io)?;
 
         Source::piped(ytdl)
+    }
+}
+
+impl Debug for Source {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("Source(_)")
     }
 }
 

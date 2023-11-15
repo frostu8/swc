@@ -2,6 +2,9 @@
 
 use std::fmt::{self, Debug, Display, Formatter};
 use tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
+use tungstenite::error::{
+    Error as WsError, ProtocolError as WsProtocolError,
+};
 
 use super::rtp::IpDiscoveryError;
 
@@ -11,7 +14,7 @@ pub enum Error {
     Api(ApiError),
     Closed(Option<CloseFrame<'static>>),
     Protocol(ProtocolError),
-    Ws(tungstenite::error::Error),
+    Ws(WsError),
     Io(std::io::Error),
     IpDiscovery(IpDiscoveryError),
 }
@@ -29,7 +32,8 @@ impl Error {
     pub fn can_resume(&self) -> bool {
         match self {
             Error::Api(err) => matches!(err.code, Code::VoiceServerCrashed),
-            Error::Io(_) => true,
+            Error::Ws(WsError::Protocol(p)) =>
+                matches!(p, WsProtocolError::ResetWithoutClosingHandshake),
             _ => false,
         }
     }

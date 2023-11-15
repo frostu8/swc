@@ -13,6 +13,8 @@ use twilight_model::channel::message::embed::{
 
 use serde::Deserialize;
 
+use tracing::instrument;
+
 //use crate::voice::{Source, source::Error as SourceError};
 
 static YTDL_EXECUTABLE: OnceLock<String> = OnceLock::new();
@@ -30,6 +32,7 @@ where
 }
 
 /// The result of a `youtube-dl` query.
+#[derive(Debug)]
 pub enum Query {
     /// A track was found.
     Track(Track),
@@ -47,6 +50,7 @@ impl Query {
     /// slow operation, and has a tendency to time things out. Offload this
     /// work to a new async task and communicate the completion of the task
     /// through message passing.
+    #[instrument(name = "Query::query")]
     pub async fn query(query: &str) -> Result<Query, QueryError> {
         let mut ytdl = Command::new(ytdl_executable())
             .args(&["--yes-playlist", "--flat-playlist", "-J", query])
@@ -169,10 +173,7 @@ fn output_is_playlist(out: &str) -> bool {
         let from = from + 8;
         match out[from..].find(&[',', '}'] as &[_]) {
             Some(to) if out[from..from + to].trim() == r#""playlist""# => true,
-            Some(to) => {
-                info!("{}", out[from..from + to].trim());
-                false
-            }
+            Some(_to) => false,
             _ => false,
         }
     } else {

@@ -1,7 +1,7 @@
 //! Simple interaction helpers.
 
-use twilight_model::application::interaction::{
-    application_command::{CommandDataOption, CommandOptionValue},
+use twilight_model::application::interaction::application_command::{
+    CommandDataOption, CommandOptionValue,
 };
 
 pub mod ext {

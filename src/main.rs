@@ -1,4 +1,3 @@
-use log::LevelFilter;
 use std::{env, sync::Arc};
 
 use swc::music::{self, QueueServer};
@@ -19,10 +18,7 @@ use twilight_model::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     dotenv::dotenv().ok();
-    env_logger::Builder::new()
-        .filter_level(LevelFilter::Debug)
-        .parse_default_env()
-        .init();
+    tracing_subscriber::fmt::init();
 
     // init ytdl executable
     swc::ytdl::init_ytdl_executable(|| {
@@ -60,9 +56,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     loop {
         let ev = match shard.next_event().await {
             Ok(event) => event,
-            Err(err) => {
-                log::error!("FATAL: {}", err);
+            Err(err) if err.is_fatal() => {
+                tracing::error!(?err, "FATAL: {}", err);
                 return Err(err.into());
+            }
+            Err(err) => {
+                tracing::warn!(?err, "got disconnect, reconnecting");
+                continue;
             }
         };
 

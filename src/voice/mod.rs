@@ -96,6 +96,8 @@ pub use source::Source;
 
 use streamer::{Status, PacketStreamer};
 
+use tracing::{error, debug, instrument};
+
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
 use rtp::Socket;
@@ -179,7 +181,7 @@ impl Player {
 
             match task {
                 Ok(task) => task.run().await,
-                Err(err) => error!("voice init: {}", err),
+                Err(err) => error!(%err, "voice init error"),
             }
         });
 
@@ -335,7 +337,10 @@ impl PlayerTask {
         let mut vstu: Option<Box<VoiceStateUpdate>> = None;
         let mut vseu: Option<VoiceServerUpdate> = None;
 
-        debug!("waiting for VoiceStateUpdate and VoiceServerUpdate...");
+        let span = tracing::debug_span!(
+            "waiting for VoiceStateUpdate and VoiceServerUpdate...",
+        );
+        let _span = span.enter();
 
         while let Ok(Some(ev)) = timeout_at(deadline, gateway_rx.recv()).await {
             match ev {
@@ -371,7 +376,12 @@ impl PlayerTask {
             return Err(Error::CannotJoin);
         };
 
-        debug!("got new session; establishing ws connection...");
+        drop(_span);
+
+        let span = tracing::debug_span!(
+            "got new session; establishing ws connection...",
+        );
+        let _span = span.enter();
 
         let (ws, rtp) = timeout_at(deadline, Connection::connect(session))
             .await
@@ -398,7 +408,42 @@ impl PlayerTask {
         })
     }
 
-    pub async fn set_playing(&mut self, playing: bool) {
+    #[instrument(skip(self))]
+    async fn reconnect(&mut self) -> Result<(), Error> {
+        if self.state.voice_state.read().await.channel_id.is_none() {
+            return Err(Error::Disconnected);
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(5000);
+
+        loop {
+            match timeout_at(deadline, self.gateway_rx.recv()).await {
+                Ok(Some(ev)) => match ev {
+                    GatewayEvent::VoiceServerUpdate(vseu) => {
+                        // server update; reconnect
+                        self.voice_server_update(vseu).await?;
+                        return Ok(());
+                    }
+                    GatewayEvent::VoiceStateUpdate(vstu) => {
+                        if vstu.channel_id.is_none() {
+                            return Err(Error::Disconnected);
+                        }
+
+                        // update state
+                        *self.state.voice_state.write().await = vstu.0;
+                    }
+                }
+                Ok(None) => {
+                    return Err(Error::GatewayClosed);
+                }
+                Err(_) => {
+                    return Err(Error::Timeout);
+                }
+            }
+        }
+    }
+
+    async fn set_playing(&mut self, playing: bool) {
         if self.state.playing.fetch_xor(playing, Ordering::Acquire) {
             self.state.playing.store(playing, Ordering::Release);
             let kind = if playing {
@@ -417,6 +462,7 @@ impl PlayerTask {
     /// Runs the task, consuming it.
     ///
     /// **Do not call this on the main thread, as it will not terminate.**
+    #[instrument(skip(self))]
     pub async fn run(mut self) {
         if let Err(err) = self.run_inner().await {
             let _ = self.event_tx.send(Event {
@@ -428,11 +474,13 @@ impl PlayerTask {
         // attempt do cleanup
         if let Some(mut source) = self.streamer.take_source() {
             if let Err(err) = source.close().await {
-                error!("close source error: {}", err);
+                error!(%err, "close source error");
             }
         }
     }
 
+    /// TODO: is this a good idea?
+    #[instrument(skip(self))]
     async fn run_inner(&mut self) -> Result<(), Error> {
         loop {
             tokio::select! {
@@ -445,19 +493,11 @@ impl PlayerTask {
                             // discard event
                             debug!("voice ev: {:?}", ev);
                         }
-                        // TODO: handle random disconnects
-                        /*
-                        Some(Err(err)) if err.disconnected() => {
+                        Some(Err(err)) if err.can_resume() => {
                             // normal disconnect event
                             // attempt to reconnect if the disconnect was a move
-                            let timeout = Instant::now() + Duration::from_millis(1000);
-                            match timeout_at(timeout, self.reconnect()).await {
-                                // resume normal flow
-                                Ok(Ok(())) => (),
-                                Ok(Err(err)) => return Err(err).context("disconnected"),
-                                Err(_) => bail!("timed out after 1000ms"),
-                            }
-                        }*/
+                            self.reconnect().await?;
+                        }
                         Some(Err(err)) => return Err(Error::from(err)),
                         None => break,
                     }
@@ -512,6 +552,7 @@ impl PlayerTask {
                                 delay: Some(0),
                             })
                             .await?;
+
                             self.set_playing(true).await;
                         }
                         Status::Stopped(ssrc) => {
@@ -521,7 +562,10 @@ impl PlayerTask {
                                 delay: Some(0),
                             })
                             .await?;
-                            self.set_playing(false).await;
+
+                            if !self.streamer.has_source() {
+                                self.set_playing(false).await;
+                            }
                         }
                     }
                 }
@@ -542,7 +586,17 @@ impl PlayerTask {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn voice_server_update(&mut self, vseu: VoiceServerUpdate) -> Result<(), Error> {
+        tracing::debug!(
+            guild_id = self.state.guild_id.get(),
+            user_id = self.state.user_id.get(),
+            endpoint = vseu.endpoint.as_ref().unwrap(),
+            token = vseu.token,
+            session_id = self.ws.session().session_id,
+            "reconnecting to voice gateway",
+        );
+
         let session = Session {
             guild_id: self.state.guild_id,
             user_id: self.state.user_id,

@@ -4,6 +4,8 @@ use super::constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX, SILENCE_FRAME};
 use super::rtp::{Socket, Packet};
 use super::{Source, Error};
 
+use tracing::{instrument, warn, debug_span};
+
 use tokio::time::{Instant, Duration, sleep_until, timeout_at};
 
 /// Audio packet streamer.
@@ -12,6 +14,7 @@ use tokio::time::{Instant, Duration, sleep_until, timeout_at};
 /// is actually really awesome! Well, until you realize that sending packets at
 /// 4x the actual speed of the audio is going to cause some buffer issues and
 /// also make you tonight's biggest loser.
+#[derive(Debug)]
 pub struct PacketStreamer {
     patience: Duration,
 
@@ -49,6 +52,11 @@ impl PacketStreamer {
         self.source = Some(source);
     }
 
+    /// Checks if the streamer has a source.
+    pub fn has_source(&self) -> bool {
+        self.source.is_some()
+    }
+
     /// Takes the inner [`Source`].
     pub fn take_source(&mut self) -> Option<Source> {
         self.wait_for_source();
@@ -60,12 +68,16 @@ impl PacketStreamer {
     ///
     /// This future is intended to be cancelled, as it will not return unless
     /// there's an error or the status of packet flow changes.
+    #[instrument]
     pub async fn stream(
         &mut self,
         rtp: &mut Socket,
     ) -> Result<Status, Error> {
         loop {
             if self.ready {
+                let span = debug_span!("send packet");
+                let _span = span.enter();
+
                 sleep_until(self.next_packet).await;
 
                 // send packet
@@ -128,6 +140,7 @@ impl PacketStreamer {
     ///
     /// This will mark the `self.ready` flag so that the read packet can now
     /// be processed.
+    #[instrument]
     async fn next(&mut self, ssrc: u32) -> Result<Option<Status>, Error> {
         if self.silence_frames > 0 {
             self.silence_frames -= 1;
@@ -158,6 +171,7 @@ impl PacketStreamer {
     /// Polls for the next packet from the source.
     ///
     /// This will wait until the source is ready.
+    #[instrument]
     async fn next_from_source(&mut self, ssrc: u32) -> Result<Option<Status>, Error> {
         let Some(source) = self.source.as_mut() else {
             // there is no source, wait

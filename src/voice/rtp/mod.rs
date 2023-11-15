@@ -5,6 +5,7 @@ mod crypto;
 
 pub use crypto::{EncryptionMode, Encryptor};
 pub use error::Error;
+use tracing::instrument;
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::net::{AddrParseError, IpAddr, SocketAddr};
@@ -188,6 +189,12 @@ where
     }
 }
 
+impl<T> Debug for Packet<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("Packet(_)")
+    }
+}
+
 impl Default for Packet<[u8; VOICE_PACKET_MAX]> {
     fn default() -> Packet<[u8; VOICE_PACKET_MAX]> {
         Packet::new([0u8; VOICE_PACKET_MAX])
@@ -198,6 +205,7 @@ impl Default for Packet<[u8; VOICE_PACKET_MAX]> {
 ///
 /// Accepts a UDP socket connected to a Discord endpoint. **While the client is
 /// waiting for a UDP response, unrelated packets will throw errors.**
+#[instrument]
 pub async fn ip_discovery(udp: &UdpSocket, ssrc: u32) -> Result<SocketAddr, IpDiscoveryError> {
     const REQ_HEADER: &[u8] = &[0x00, 0x01, 0x00, 0x46];
     const RES_HEADER: &[u8] = &[0x00, 0x02, 0x00, 0x46];

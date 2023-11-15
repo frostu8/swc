@@ -9,6 +9,8 @@ use twilight_http::Client as HttpClient;
 use std::future::Future;
 use std::sync::Arc;
 
+use tracing::instrument;
+
 use super::commands::CommandData;
 
 /// A query queue.
@@ -41,26 +43,12 @@ where
     pub async fn enqueue<F, Fut>(&self, data: CommandData, task: F)
     where
         F: FnOnce(&CommandData) -> Fut + Send + 'static,
-        Fut: Future<Output = T> + Send,
+        Fut: Future<Output = T> + Send + 'static,
     {
         let http_client = self.http_client.clone();
         let query_tx = self.query_tx.clone();
 
-        tokio::spawn(async move {
-            // ack response
-            data
-                .respond(&http_client)
-                .ack()
-                .await
-                .unwrap();
-
-            let result = task(&data).await;
-
-            query_tx.send(QueryResult {
-                data,
-                message: result,
-            }).unwrap();
-        });
+        tokio::spawn(process(data, http_client, query_tx, task));
     }
 
     /// Fetches the next ready result.
@@ -69,6 +57,33 @@ where
     }
 }
 
+#[instrument(name = "QueryQueue::process", skip(http_client, query_tx, task))]
+async fn process<F, Fut, T>(
+    data: CommandData,
+    http_client: Arc<HttpClient>,
+    query_tx: UnboundedSender<QueryResult<T>>,
+    task: F,
+)
+where
+    F: FnOnce(&CommandData) -> Fut + Send + 'static,
+    Fut: Future<Output = T> + Send + 'static,
+{
+    // ack response
+    data
+        .respond(&http_client)
+        .ack()
+        .await
+        .unwrap();
+
+    let result = task(&data).await;
+
+    query_tx.send(QueryResult {
+        data,
+        message: result,
+    }).unwrap();
+}
+
+#[derive(Debug)]
 pub struct QueryResult<T> {
     pub data: CommandData,
     pub message: T,

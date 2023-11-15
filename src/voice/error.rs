@@ -20,6 +20,8 @@ pub enum Error {
     Timeout,
     /// The bot was unable to join the specified channel.
     CannotJoin,
+    /// The bot was disconnected from the channel.
+    Disconnected,
 }
 
 impl From<ws::Error> for Error {
@@ -49,6 +51,7 @@ impl Display for Error {
             Error::GatewayClosed => f.write_str("gateway closed unexpected"),
             Error::Timeout => f.write_str("operation timed out"),
             Error::CannotJoin => f.write_str("unable to join Discord channel"),
+            Error::Disconnected => f.write_str("bot disconnected from channel"),
         }
     }
 }

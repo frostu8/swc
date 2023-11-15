@@ -12,6 +12,7 @@ pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
 use rand::SeedableRng;
+use tracing::{instrument, error};
 use twilight_model::channel::message::Embed;
 use twilight_model::channel::message::embed::EmbedThumbnail;
 
@@ -202,6 +203,7 @@ struct PlayerState {
 }
 
 impl QueueState {
+    #[instrument(name = "QueueState::handle_command", skip(self))]
     pub async fn handle_command(&mut self, command: Command) {
         let Command { data, action } = command;
 
@@ -353,6 +355,7 @@ impl QueueState {
     /// 
     /// A user can use a music control command if the user is in the same
     /// channel as the bot.
+    #[instrument(name = "QueueState::check_user_in_channel", skip(self))]
     async fn check_user_in_channel(
         &self,
         user_id: Id<UserMarker>,
@@ -377,6 +380,7 @@ impl QueueState {
         }
     }
 
+    #[instrument(name = "QueueState::handle_query", skip(self))]
     pub async fn handle_query(&mut self, result: QueryMessage<QueryResult>) {
         let QueryMessage {
             data: command,
@@ -489,6 +493,7 @@ impl QueueState {
     }
 
     /// Joins or moves the bot to a Discord channel.
+    #[instrument(name = "QueueState::join", skip(self))]
     pub async fn join(&mut self, channel_id: Id<ChannelMarker>) {
         let voice_state = self.voice_state().await;
         if let Some(voice_state) = voice_state {
@@ -538,6 +543,8 @@ impl QueueState {
     }
 }
 
+// TODO: is this a good idea?
+#[instrument(name = "music_queue_run", skip(state))]
 async fn queue_run(mut state: QueueState) {
     loop {
         tokio::select! {
@@ -553,7 +560,7 @@ async fn queue_run(mut state: QueueState) {
             }
             // gateway event
             Some(event) = state.gateway_rx.recv() => {
-                debug!("{:?}", event);
+                //tracing::debug!(?event, "got voice gateway event");
 
                 if let Some(PlayerState { player, .. }) = state.player.as_mut() {
                     let _ = match event {
@@ -564,13 +571,13 @@ async fn queue_run(mut state: QueueState) {
             },
             // low level voice event
             Some(event) = voice_event(state.player.as_mut()) => {
-                debug!("{:?}", event);
+                //tracing::debug!(?event, "got player event");
 
                 match event.kind {
                     voice::EventType::Ready => {
                     }
                     voice::EventType::Error(err) => {
-                        error!("audio: {}", err);
+                        error!(%err, "audio");
                     }
                     voice::EventType::Playing => {
                     }

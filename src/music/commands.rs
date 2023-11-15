@@ -19,13 +19,14 @@ use twilight_model::{
 /// A single command.
 ///
 /// Holds information about the command and how to respond to it.
+#[derive(Debug)]
 pub struct Command {
     pub data: CommandData,
     pub action: Action,
 }
 
 /// The actual command data.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommandData {
     pub interaction_id: Id<InteractionMarker>,
     pub interaction_token: String,
@@ -36,6 +37,7 @@ pub struct CommandData {
 }
 
 /// The action that a commands wants completed.
+#[derive(Debug)]
 pub enum Action {
     /// Plays a track, with a URL to query YTDL with.
     Play(String),

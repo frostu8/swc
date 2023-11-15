@@ -28,6 +28,10 @@ use twilight_model::id::{
     Id,
 };
 
+use std::fmt::Debug;
+
+use tracing::{instrument, warn, error, info, debug, debug_span};
+
 /// Unmanaged voice connection to a websocket.
 ///
 /// This must be polled constantly to ensure heartbeats are sent. To poll the
@@ -43,6 +47,7 @@ impl Connection {
     ///
     /// Returns the websocket connection and the UDP connection used to send
     /// Opus frames.
+    #[instrument]
     pub async fn connect(session: Session) -> Result<(Connection, Socket), Error> {
         let (wss, _response) = connect_async(format!("wss://{}/?v=4", session.endpoint)).await?;
 
@@ -59,6 +64,7 @@ impl Connection {
     /// Polls for the next event.
     ///
     /// This is (should be) cancel-safe.
+    #[instrument(skip(self))]
     pub async fn recv(&mut self) -> Option<Result<Event, Error>> {
         loop {
             tokio::select! {
@@ -69,7 +75,7 @@ impl Connection {
                             if self.heartbeater.nonce() == ack.0 {
                                 debug!("voice heartbeat ACK");
                             } else {
-                                warn!("invalid ACK, nonce: {}", ack.0);
+                                warn!(nonce = ack.0, "invalid ACK");
                             }
                         }
                         Some(Ok(GatewayEvent::Speaking(ev))) => {
@@ -82,10 +88,10 @@ impl Connection {
                             return Some(Ok(Event::ClientDisconnect(ev)));
                         }
                         Some(Ok(ev)) => {
-                            warn!("skipping ev: {:?}", ev);
+                            warn!(?ev, "skipping ev");
                         }
                         Some(Err(Error::Protocol(err))) => {
-                            warn!("ignoring protocol error: {}", err);
+                            warn!(%err, "ignoring protocol error");
                         }
                         Some(Err(err)) if err.can_resume() => {
                             match self.resume().await {
@@ -109,7 +115,8 @@ impl Connection {
     }
 
     /// Sends an event to the remote endpoint.
-    pub async fn send(&mut self, command: impl Command) -> Result<(), Error> {
+    #[instrument(skip(self))]
+    pub async fn send(&mut self, command: impl Command + Debug) -> Result<(), Error> {
         let ev = command.to_event();
 
         match send(&mut self.wss, &ev).await {
@@ -133,8 +140,9 @@ impl Connection {
     /// for more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
+    #[instrument(name = "voice_websocket_handshake", skip(self))]
     async fn handshake(&mut self) -> Result<Socket, Error> {
-        debug!("begin websocket handshake");
+        debug!(?self.session, "setting up connection");
 
         send(
             &mut self.wss,
@@ -148,6 +156,9 @@ impl Connection {
         .await?;
 
         // wait for hello and ready events
+        let span = debug_span!("waiting for Hello and Ready");
+        let _span = span.enter();
+
         let mut hello: Option<Hello> = None;
         let mut ready: Option<Ready> = None;
 
@@ -168,13 +179,13 @@ impl Connection {
                     }
                 }
                 Ok(ev) => {
-                    warn!("unexpected event: {:?}", ev);
+                    warn!(?ev, "unexpected event");
                 }
                 Err(Error::Protocol(err)) => {
-                    warn!("ignoring protocol error: {}", err);
+                    warn!(%err, "ignoring protocol error");
                 }
                 Err(err) => {
-                    error!("ws error: {}", err);
+                    error!(%err, "ws error");
                     return Err(err);
                 }
             }
@@ -182,6 +193,8 @@ impl Connection {
 
         let hello = hello.unwrap();
         let ready = ready.unwrap();
+
+        drop(_span);
 
         // create heartbeater
         self.heartbeater = Heartbeater::new(hello.heartbeat_interval);
@@ -191,6 +204,9 @@ impl Connection {
         udp.connect((ready.ip, ready.port)).await?;
 
         let ip = rtp::ip_discovery(&udp, ready.ssrc).await?;
+
+        let span = debug_span!("select protocol");
+        let _span = span.enter();
 
         // choose encryption mode
         // order: lite > suffix > normal
@@ -214,7 +230,7 @@ impl Connection {
             }
         };
 
-        debug!("selected encryption mode {}", mode);
+        debug!(%mode, "selected encryption mode");
 
         // select protocol
         send(
@@ -230,7 +246,12 @@ impl Connection {
         )
         .await?;
 
+        drop(_span);
+
         // wait for response
+        let span = debug_span!("wait for response");
+        let _span = span.enter();
+
         let mut desc: Option<SessionDescription> = None;
 
         while let Some(ev) = recv(&mut self.wss).await {
@@ -240,13 +261,13 @@ impl Connection {
                     break;
                 }
                 Ok(ev) => {
-                    warn!("unexpected event: {:?}", ev);
+                    warn!(?ev, "unexpected event");
                 }
                 Err(Error::Protocol(err)) => {
-                    warn!("ignoring protocol error: {}", err);
+                    warn!(%err, "ignoring protocol error");
                 }
                 Err(err) => {
-                    error!("ws error: {}", err);
+                    error!(%err, "ws error");
                     return Err(err);
                 }
             }
@@ -254,7 +275,7 @@ impl Connection {
 
         let desc = desc.unwrap();
 
-        info!("voice connected to {}", self.session.endpoint);
+        info!(endpoint = self.session.endpoint, "voice connected");
 
         Ok(Socket::new(
             udp,
@@ -267,8 +288,12 @@ impl Connection {
     /// [discord's docs][1] for more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
+    #[instrument(name = "voice_websocket_resume", skip(self))]
     async fn resume(&mut self) -> Result<(), Error> {
-        debug!("begin websocket resume handshake");
+        let (wss, _response) = connect_async(format!("wss://{}/?v=4", self.session.endpoint)).await?;
+
+        debug!("got new connection");
+        self.wss = wss;
 
         send(
             &mut self.wss,
@@ -281,16 +306,19 @@ impl Connection {
         .await?;
 
         // wait for response
+        let span = debug_span!("wait for resume response");
+        let _span = span.enter();
+
         while let Some(ev) = recv(&mut self.wss).await {
             match ev {
                 Ok(GatewayEvent::Resumed) => {
                     break;
                 }
                 Ok(ev) => {
-                    warn!("unexpected event: {:?}", ev);
+                    warn!(?ev, "unexpected event");
                 }
                 Err(err) => {
-                    error!("resumed failed: {}", err);
+                    error!(%err, "resumed failed");
                     return Err(err);
                 }
             }
@@ -301,6 +329,7 @@ impl Connection {
 }
 
 /// Receives a gateway event from the server.
+#[instrument(skip(wss))]
 async fn recv(
     mut wss: impl Stream<Item = Result<Message, tungstenite::error::Error>> + Unpin,
 ) -> Option<Result<GatewayEvent, Error>> {
@@ -349,6 +378,7 @@ async fn recv(
 }
 
 /// Sends a gateway event to the server.
+#[instrument(skip(wss))]
 async fn send(
     mut wss: impl Sink<Message, Error = tungstenite::error::Error> + Unpin,
     ev: &GatewayEvent,
@@ -363,6 +393,7 @@ async fn send(
 }
 
 /// Session information of a websocket.
+#[derive(Debug)]
 pub struct Session {
     /// The endpoint of the session.
     pub endpoint: String,
@@ -396,6 +427,7 @@ impl Command for Speaking {
 }
 
 /// Manages heartbeat state.
+#[derive(Debug)]
 struct Heartbeater {
     interval: f32,
     nonce: u64,
