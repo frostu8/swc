@@ -155,8 +155,20 @@ async fn handle_command(
                 },
             ).await;
         }
+        "shuffle" => {
+            // send to the queue
+            queue_server.command(
+                guild_id,
+                music::Command {
+                    data: command_data,
+                    action: music::Action::Shuffle,
+                },
+            ).await;
+        }
         // ignore missing commands
-        _ => (),
+        name => {
+            log::warn!("got missing or invalid command: /{}", name)
+        }
     }
 }
 
@@ -184,7 +196,8 @@ async fn wait_for_ready(
             // setup commands
             http_client
                 .interaction(ready.application.id)
-                .set_guild_commands(Id::new(683483117473759249), &swc::commands())
+                .set_guild_commands(Id::new(952331087714070548), &swc::commands())
+                //.set_global_commands(&swc::commands())
                 .await
                 .unwrap();
 

@@ -33,6 +33,8 @@ where
 pub enum Query {
     /// A track was found.
     Track(Track),
+    /// A playlist was found.
+    Playlist(Playlist),
 }
 
 impl Query {
@@ -75,36 +77,42 @@ impl Query {
         if let Some(err) = err {
             Err(QueryError::Ytdl(err))
         } else {
-            // TODO: only supports single tracks with a source
-            Query::track_from_json(&out)
+            if output_is_playlist(&out) {
+                Query::playlist_from_json(&out)
+            } else {
+                // not a playlist, or an error occured
+                Query::track_from_json(&out)
+            }
         }
     }
 
-    fn track_from_json(
+    fn playlist_from_json(
         json: &str,
     ) -> Result<Query, QueryError> {
         // parse json data
         #[derive(Deserialize)]
-        struct YtdlQuery {
-            webpage_url: String,
+        struct YtdlPlaylist {
             title: String,
             uploader: String,
             #[serde(default)]
             uploader_url: Option<String>,
+            webpage_url: String,
             #[serde(default)]
             thumbnail: Option<String>,
+            entries: Vec<YtdlQuery>,
         }
 
-        let YtdlQuery {
-            webpage_url,
+        let YtdlPlaylist {
             title,
             uploader,
             uploader_url,
+            webpage_url,
             thumbnail,
+            entries,
         } = serde_json::from_str(json).map_err(QueryError::Json)?;
 
-        // create a track as the result
-        let track = Track {
+        // create a playlist as the result
+        let playlist = Playlist {
             url: webpage_url,
             title,
             author: Author {
@@ -112,9 +120,63 @@ impl Query {
                 url: uploader_url,
             },
             thumbnail_url: thumbnail,
+            tracks: entries
+                .into_iter()
+                // skip privated videos (wtf)
+                .filter_map(|entry| entry.try_into().ok())
+                .collect(),
         };
 
-        Ok(Query::Track(track))
+        Ok(Query::Playlist(playlist))
+    }
+
+    fn track_from_json(
+        json: &str,
+    ) -> Result<Query, QueryError> {
+        // parse json data
+        let track: YtdlQuery = serde_json::from_str(json)
+            .map_err(QueryError::Json)?;
+
+        track
+            .try_into()
+            .map(|track| Query::Track(track))
+    }
+}
+
+#[derive(Deserialize)]
+struct YtdlQuery {
+    id: String,
+    webpage_url: Option<String>,
+    title: String,
+    uploader: Option<String>,
+    #[serde(default)]
+    uploader_url: Option<String>,
+    #[serde(default)]
+    thumbnail: Option<String>,
+    #[serde(default)]
+    thumbnails: Option<Vec<YtdlThumbnail>>,
+}
+
+#[derive(Deserialize)]
+struct YtdlThumbnail {
+    url: String,
+    height: u32,
+    width: u32,
+}
+
+fn output_is_playlist(out: &str) -> bool {
+    if let Some(from) = out.find(r#""_type":"#) {
+        let from = from + 8;
+        match out[from..].find(&[',', '}'] as &[_]) {
+            Some(to) if out[from..from + to].trim() == r#""playlist""# => true,
+            Some(to) => {
+                info!("{}", out[from..from + to].trim());
+                false
+            }
+            _ => false,
+        }
+    } else {
+        false
     }
 }
 
@@ -169,6 +231,116 @@ impl Track {
     }
 }
 
+impl TryFrom<YtdlQuery> for Track {
+    type Error = QueryError; 
+
+    fn try_from(e: YtdlQuery) -> Result<Track, Self::Error> {
+        let YtdlQuery {
+            id,
+            webpage_url,
+            title,
+            uploader,
+            uploader_url,
+            thumbnail,
+            thumbnails,
+        } = e;
+
+        let url = match webpage_url {
+            Some(url) => url,
+            None => format!("https://www.youtube.com/watch?v={}", id),
+        };
+
+        // find thumbnail
+        let thumbnail = thumbnail
+            .or_else(|| thumbnails
+                .unwrap_or_default()
+                .into_iter()
+                .reduce(|acc, t| {
+                    if t.width > acc.width || t.height > acc.height {
+                        t
+                    } else {
+                        acc
+                    }
+                })
+                .map(|t| t.url));
+
+        // create a track as the result
+        Ok(Track {
+            url,
+            title,
+            author: Author {
+                name: uploader.ok_or_else(|| QueryError::PrivateVideo)?,
+                url: uploader_url,
+            },
+            thumbnail_url: thumbnail,
+        })
+    }
+}
+
+/// Many `youtube-dl` tracks.
+///
+/// Produced from the output of a `youtube-dl` query.
+#[derive(Clone, Debug)]
+pub struct Playlist {
+    /// A url which, when provided to `youtube-dl` should produce the same
+    /// result.
+    pub url: String,
+    /// A visible title for the playlist.
+    pub title: String,
+    /// The author of the playlist.
+    pub author: Author,
+    /// The URL of the thumbnail of the playlist.
+    pub thumbnail_url: Option<String>,
+    /// The tracks of the playlist.
+    pub tracks: Vec<Track>,
+}
+
+impl Playlist {
+    /// Converts a `Playlist` to a readable embed.
+    pub fn as_embed(&self) -> Embed {
+        let Playlist {
+            url,
+            title,
+            author,
+            thumbnail_url,
+            tracks,
+            ..
+        } = self.clone();
+
+        Embed {
+            author: Some(EmbedAuthor {
+                name: author.name,
+                url: author.url,
+                icon_url: None,
+                proxy_icon_url: None,
+            }),
+            // TODO: color
+            color: Some(0xEE1428),
+            description: None,
+            fields: Vec::new(),
+            footer: None,
+            image: None,
+            kind: String::from("rich"),
+            provider: None,
+            title: Some(title),
+            timestamp: None,
+            thumbnail: thumbnail_url
+                .or_else(|| tracks
+                    .iter()
+                    .next()
+                    .and_then(|t| t.thumbnail_url.clone()))
+                .map(|url| EmbedThumbnail {
+                    url: url,
+                    height: None,
+                    width: None,
+                    proxy_url: None,
+                }),
+            url: Some(url),
+            video: None,
+        }
+    }
+}
+
 /// An author of a track.
 #[derive(Clone, Debug)]
 pub struct Author {
@@ -189,6 +361,8 @@ pub enum QueryError {
     Json(serde_json::Error),
     /// Ytdl produced an error.
     Ytdl(YtdlError),
+    /// The video that was queried is private.
+    PrivateVideo,
 }
 
 impl Display for QueryError {
@@ -198,6 +372,9 @@ impl Display for QueryError {
             QueryError::Utf8(err) => Display::fmt(err, f),
             QueryError::Json(err) => Display::fmt(err, f),
             QueryError::Ytdl(err) => Display::fmt(err, f),
+            QueryError::PrivateVideo => f.write_str(
+                "query result is privated or otherwise not visible",
+            ),
         }
     }
 }
@@ -209,6 +386,7 @@ impl std::error::Error for QueryError {
             QueryError::Utf8(err) => Some(err),
             QueryError::Json(err) => Some(err),
             QueryError::Ytdl(err) => Some(err),
+            _ => None,
         }
     }
 }

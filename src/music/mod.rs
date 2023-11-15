@@ -11,12 +11,16 @@ mod query;
 pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
+use rand::SeedableRng;
 use twilight_model::channel::message::Embed;
 use twilight_model::channel::message::embed::EmbedThumbnail;
 
 use std::sync::Arc;
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Display, Formatter, Write as _};
+use std::iter::once;
+
+use rand::{rngs::SmallRng, seq::SliceRandom};
 
 use tokio::task::JoinHandle;
 use tokio::sync::{
@@ -163,6 +167,8 @@ impl Queue {
 
             track_queue: VecDeque::default(),
             playing: None,
+
+            rng: SmallRng::from_entropy(),
         }));
 
         Queue {
@@ -184,6 +190,8 @@ struct QueueState {
 
     track_queue: VecDeque<Track>,
     playing: Option<Track>,
+
+    rng: SmallRng,
 }
 
 type QueryResult = Result<YtdlQuery, QueryError>;
@@ -201,6 +209,7 @@ impl QueueState {
             Action::Play(track) => self.play(&data, track).await,
             Action::Skip => self.skip(&data).await,
             Action::Queue => self.queue(&data).await,
+            Action::Shuffle => self.shuffle(&data).await,
         };
 
         if let Err(err) = res {
@@ -272,11 +281,17 @@ impl QueueState {
             .unwrap_or_else(|| String::from("nothing currently playing"));
 
         // construct queue
-        for (i, track) in self.track_queue.iter().enumerate() {
-            description.push_str(&format!("\n{}. [{}]({})",
+        for (i, track) in self.track_queue.iter().enumerate().take(10) {
+            write!(&mut description, "\n{}. [{}]({})",
                 i + 1,
                 track.title,
-                track.url));
+                track.url).unwrap();
+        }
+
+        if self.track_queue.len() > 10 {
+            let rest = self.track_queue.len() - 10;
+
+            write!(&mut description, "\nand {} more...", rest).unwrap();
         }
 
         let embed = Embed {
@@ -311,6 +326,23 @@ impl QueueState {
         let _ = command
             .respond(&self.queue_server.http_client)
             .embed(embed)
+            .respond()
+            .await;
+
+        Ok(())
+    }
+
+    async fn shuffle(
+        &mut self,
+        command: &CommandData,
+    ) -> Result<(), UserError> {
+        let queue_slice = self.track_queue.make_contiguous();
+
+        queue_slice.shuffle(&mut self.rng);
+
+        let _ = command
+            .respond(&self.queue_server.http_client)
+            .content("shuffled music queue")
             .respond()
             .await;
 
@@ -377,7 +409,20 @@ impl QueueState {
                     .await;
 
                 // enqueue track
-                self.place_track(track);
+                self.place_tracks(once(track));
+            }
+            YtdlQuery::Playlist(playlist) => {
+                let _ = command
+                    .respond(&self.queue_server.http_client)
+                    .embed(Embed {
+                        description: Some(String::from("enqueued playlist")),
+                        ..playlist.as_embed()
+                    })
+                    .update()
+                    .await;
+
+                // enqueue track
+                self.place_tracks(playlist.tracks);
             }
         }
     }
@@ -386,19 +431,26 @@ impl QueueState {
     /// 
     /// Starts playing the song immediately if there is no song playing.
     /// Otherwise, enqueue the track on the queue.
-    pub fn place_track(&mut self, track: Track) {
+    /// 
+    /// To enqueue one track, use [`std::iter::once`].
+    pub fn place_tracks(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        let mut tracks = tracks.into_iter();
+
         if self.playing.is_none() {
-            // get player
-            let player = self.unwrap_player();
+            if let Some(track) = tracks.next() {
+                // get player
+                let player = self.unwrap_player();
 
-            // play track immediately
-            player.play(Source::ytdl(&track.url).unwrap()).unwrap();
+                // play track immediately
+                let source = Source::ytdl(&track.url).unwrap();
+                player.play(source).unwrap();
 
-            self.playing = Some(track);
-        } else {
-            // place track on queue
-            self.track_queue.push_back(track);
+                self.playing = Some(track);
+            }
         }
+
+        // place other tracks on queue
+        self.track_queue.extend(tracks);
     }
 
     /// Skips the current track by stopping the player.
@@ -418,7 +470,7 @@ impl QueueState {
             return;
         };
 
-        if let Some(track) = self.track_queue.pop_back() {
+        if let Some(track) = self.track_queue.pop_front() {
             player.play(Source::ytdl(&track.url).unwrap()).unwrap();
             self.playing = Some(track);
         } else {

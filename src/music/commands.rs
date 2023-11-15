@@ -43,6 +43,8 @@ pub enum Action {
     Skip,
     /// Lists all of the tracks in a queue.
     Queue,
+    /// Shuffles the tracks in a queue.
+    Shuffle,
 }
 
 impl CommandData {
