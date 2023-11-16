@@ -96,7 +96,7 @@ pub use source::Source;
 
 use streamer::{Status, PacketStreamer};
 
-use tracing::{error, debug, instrument};
+use tracing::{error, debug, instrument, debug_span};
 
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
@@ -479,10 +479,11 @@ impl PlayerTask {
         }
     }
 
-    /// TODO: is this a good idea?
-    #[instrument(skip(self))]
     async fn run_inner(&mut self) -> Result<(), Error> {
         loop {
+            let span = debug_span!("run_inner");
+            let _span = span.enter();
+
             tokio::select! {
                 biased;
 

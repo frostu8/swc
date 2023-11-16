@@ -140,7 +140,7 @@ impl PacketStreamer {
     ///
     /// This will mark the `self.ready` flag so that the read packet can now
     /// be processed.
-    #[instrument]
+    #[instrument(level = "trace")]
     async fn next(&mut self, ssrc: u32) -> Result<Option<Status>, Error> {
         if self.silence_frames > 0 {
             self.silence_frames -= 1;
@@ -171,7 +171,7 @@ impl PacketStreamer {
     /// Polls for the next packet from the source.
     ///
     /// This will wait until the source is ready.
-    #[instrument]
+    #[instrument(level = "trace")]
     async fn next_from_source(&mut self, ssrc: u32) -> Result<Option<Status>, Error> {
         let Some(source) = self.source.as_mut() else {
             // there is no source, wait

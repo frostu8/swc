@@ -317,6 +317,9 @@ impl Connection {
                 Ok(ev) => {
                     warn!(?ev, "unexpected event");
                 }
+                Err(Error::Protocol(ProtocolError::Json(err))) => {
+                    warn!(%err, "unexpected json payload");
+                }
                 Err(err) => {
                     error!(%err, "resumed failed");
                     return Err(err);

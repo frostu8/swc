@@ -12,7 +12,7 @@ pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
 use rand::SeedableRng;
-use tracing::{instrument, error};
+use tracing::{instrument, error, debug_span};
 use twilight_model::channel::message::Embed;
 use twilight_model::channel::message::embed::EmbedThumbnail;
 
@@ -543,10 +543,11 @@ impl QueueState {
     }
 }
 
-// TODO: is this a good idea?
-#[instrument(name = "music_queue_run", skip(state))]
 async fn queue_run(mut state: QueueState) {
     loop {
+        let span = debug_span!("queue_run");
+        let _span = span.enter();
+
         tokio::select! {
             biased;
 

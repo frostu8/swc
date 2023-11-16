@@ -3,6 +3,7 @@ use std::{env, sync::Arc};
 use swc::music::{self, QueueServer};
 use swc::interaction::ext::*;
 
+use tracing_subscriber::EnvFilter;
 use twilight_gateway::{Shard, ShardId, Intents, Config};
 use twilight_http::client::Client;
 use twilight_cache_inmemory::InMemoryCache;
@@ -15,10 +16,16 @@ use twilight_model::{
     gateway::event::Event, 
 };
 
+use tracing::instrument;
+
 #[tokio::main]
+#[instrument(name = "bot_main")]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     dotenv::dotenv().ok();
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_ansi(false)
+        .init();
 
     // init ytdl executable
     swc::ytdl::init_ytdl_executable(|| {
@@ -213,4 +220,3 @@ async fn wait_for_ready(
         }
     }
 }
-
