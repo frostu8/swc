@@ -337,9 +337,7 @@ impl PlayerTask {
         let mut vstu: Option<Box<VoiceStateUpdate>> = None;
         let mut vseu: Option<VoiceServerUpdate> = None;
 
-        let span = tracing::debug_span!(
-            "waiting for VoiceStateUpdate and VoiceServerUpdate...",
-        );
+        let span = tracing::debug_span!("wait_for_gateway");
         let _span = span.enter();
 
         while let Ok(Some(ev)) = timeout_at(deadline, gateway_rx.recv()).await {
@@ -378,9 +376,7 @@ impl PlayerTask {
 
         drop(_span);
 
-        let span = tracing::debug_span!(
-            "got new session; establishing ws connection...",
-        );
+        let span = tracing::debug_span!("establishing_connection");
         let _span = span.enter();
 
         let (ws, rtp) = timeout_at(deadline, Connection::connect(session))
