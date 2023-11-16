@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     dotenv::dotenv().ok();
     tracing_subscriber::fmt::fmt()
         .with_env_filter(EnvFilter::from_default_env())
-        .with_ansi(false)
+        //.with_ansi(false)
         .init();
 
     // init ytdl executable

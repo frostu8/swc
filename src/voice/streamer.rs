@@ -63,6 +63,11 @@ impl PacketStreamer {
         self.source.take()
     }
 
+    /// Checks if the streamer is still streaming packets
+    pub fn is_streaming(&self) -> bool {
+        !self.waiting_for_source || self.silence_frames > 0
+    }
+
     /// Streams the inner audio over the [`Socket`], pacing the packets so they
     /// don't destroy Discord.
     ///

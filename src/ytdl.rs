@@ -164,8 +164,8 @@ struct YtdlQuery {
 #[derive(Deserialize)]
 struct YtdlThumbnail {
     url: String,
-    height: u32,
-    width: u32,
+    height: Option<u32>,
+    width: Option<u32>,
 }
 
 fn output_is_playlist(out: &str) -> bool {

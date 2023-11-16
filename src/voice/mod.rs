@@ -583,7 +583,6 @@ impl PlayerTask {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     async fn voice_server_update(&mut self, vseu: VoiceServerUpdate) -> Result<(), Error> {
         tracing::debug!(
             guild_id = self.state.guild_id.get(),
@@ -608,6 +607,15 @@ impl PlayerTask {
             Ok(Err(err)) => return Err(Error::from(err)),
             Err(_) => return Err(Error::Timeout),
         };
+
+        if self.streamer.is_streaming() {
+            self.ws.send(Speaking {
+                speaking: 1,
+                ssrc: self.rtp.ssrc(),
+                delay: Some(0),
+            })
+            .await?;
+        }
 
         Ok(())
     }
