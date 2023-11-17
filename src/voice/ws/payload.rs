@@ -378,6 +378,7 @@ impl<'de> Deserialize<'de> for EncryptionMode {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
