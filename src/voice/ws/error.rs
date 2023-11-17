@@ -87,8 +87,12 @@ impl std::error::Error for Error {
 /// Websocket protocol error.
 #[derive(Debug)]
 pub enum ProtocolError {
-    /// Payload failed to decode or encode.
-    Json(serde_json::Error),
+    /// Payload failed to decode.
+    /// 
+    /// Contains the original payload.
+    Deser(serde_json::Error, String),
+    /// Payload failed to encode
+    Ser(serde_json::Error),
     /// The server returned an unsupported encryption mode.
     UnsupportedEncryptionMode(super::payload::EncryptionMode),
     /// The server returned a payload without a valid opcode.
@@ -98,7 +102,12 @@ pub enum ProtocolError {
 impl Display for ProtocolError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            ProtocolError::Json(err) => Display::fmt(err, f),
+            ProtocolError::Deser(err, msg) => {
+                write!(f, "failed to parse message \"{}\": {}", msg, err)
+            },
+            ProtocolError::Ser(err) => {
+                write!(f, "failed to create json: {}", err)
+            },
             ProtocolError::UnsupportedEncryptionMode(mode) => {
                 write!(f, "unsupported encryption mode \"{}\"", mode)
             }
@@ -112,7 +121,8 @@ impl Display for ProtocolError {
 impl std::error::Error for ProtocolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ProtocolError::Json(err) => Some(err),
+            ProtocolError::Deser(err, _) => Some(err),
+            ProtocolError::Ser(err) => Some(err),
             _ => None,
         }
     }

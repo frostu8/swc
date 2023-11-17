@@ -317,9 +317,6 @@ impl Connection {
                 Ok(ev) => {
                     warn!(?ev, "unexpected event");
                 }
-                Err(Error::Protocol(ProtocolError::Json(err))) => {
-                    warn!(%err, "unexpected json payload");
-                }
                 Err(err) => {
                     error!(%err, "resumed failed");
                     return Err(err);
@@ -349,7 +346,7 @@ async fn recv(
                             match event.deserialize(&mut json) {
                                 Ok(event) => return Some(Ok(event)),
                                 Err(err) => {
-                                    return Some(Err(Error::Protocol(ProtocolError::Json(err))))
+                                    return Some(Err(Error::Protocol(ProtocolError::Deser(err, msg))))
                                 }
                             }
                         }
@@ -387,7 +384,7 @@ async fn send(
     ev: &GatewayEvent,
 ) -> Result<(), Error> {
     // serialize event
-    let msg = serde_json::to_string(ev).map_err(|e| Error::Protocol(ProtocolError::Json(e)))?;
+    let msg = serde_json::to_string(ev).map_err(|e| Error::Protocol(ProtocolError::Ser(e)))?;
 
     // send message
     wss.send(Message::Text(msg)).await?;

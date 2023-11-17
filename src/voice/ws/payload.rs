@@ -14,6 +14,7 @@ use twilight_model::id::{
     marker::{GuildMarker, UserMarker},
     Id,
 };
+use serde_json::Value;
 
 /// Raw gateway event.
 #[derive(Debug)]
@@ -196,7 +197,7 @@ impl<'de> DeserializeSeed<'de> for GatewayEventDeserializer {
                     OpCode::HeartbeatAck => self.get_d(map).map(GatewayEvent::HeartbeatAck),
                     OpCode::Resume => self.get_d(map).map(GatewayEvent::Resume),
                     OpCode::Hello => self.get_d(map).map(GatewayEvent::Hello),
-                    OpCode::Resumed => Ok(GatewayEvent::Resumed),
+                    OpCode::Resumed => self.get_d::<Option::<Value>, _>(map).map(|_| GatewayEvent::Resumed),
                     OpCode::ClientConnect => self.get_d(map).map(GatewayEvent::ClientConnect),
                     OpCode::ClientDisconnect => self.get_d(map).map(GatewayEvent::ClientDisconnect),
                 }
@@ -374,5 +375,26 @@ impl<'de> Deserialize<'de> for EncryptionMode {
         }
 
         deserializer.deserialize_str(EncryptionModeVisitor)
+    }
+}
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opcode_resume()
+    {
+        const PAYLOAD: &'static str = r#"{"op":9,"d":null}"#;
+
+        let event = GatewayEventDeserializer::from_json(&PAYLOAD)
+            .unwrap();
+
+        let mut json = serde_json::Deserializer::from_str(&PAYLOAD);
+
+        let event = event
+            .deserialize(&mut json)
+            .unwrap();
+
+        assert!(matches!(event, GatewayEvent::Resumed));
     }
 }
