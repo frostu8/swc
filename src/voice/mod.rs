@@ -96,7 +96,7 @@ pub use source::Source;
 
 use streamer::{Status, PacketStreamer};
 
-use tracing::{error, debug, instrument, warn};
+use tracing::{error, debug, instrument, warn, info};
 
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
@@ -226,6 +226,15 @@ impl Player {
             .map_err(|_| PlayerClosed)
     }
 
+    /// Disconnects the player.
+    /// 
+    /// The player should not be used after this.
+    pub fn disconnect(&self) -> Result<(), PlayerClosed> {
+        self.command_tx
+            .send(Command::Disconnect)
+            .map_err(|_| PlayerClosed)
+    }
+
     /// If the player is playing a sound.
     pub fn playing(&self) -> bool {
         self.state.playing.load(Ordering::Acquire)
@@ -290,6 +299,7 @@ enum Command {
     Pause,
     Resume,
     Stop,
+    Disconnect,
 }
 
 #[derive(Debug)]
@@ -475,6 +485,10 @@ impl PlayerTask {
     /// **Do not call this on the main thread, as it will not terminate.**
     pub async fn run(mut self) {
         if let Err(err) = self.run_inner().await {
+            if matches!(err, Error::GatewayClosed) {
+                info!("normal disconnect event");
+            }
+
             let _ = self.event_tx.send(Event {
                 guild_id: self.state.guild_id,
                 kind: EventType::Error(err),
@@ -552,6 +566,11 @@ impl PlayerTask {
                         Some(Command::Stop) => {
                             self.close_source().await?;
                         }
+                        Some(Command::Disconnect) => {
+                            // disconnect
+                            self.ws.disconnect().await;
+                            break;
+                        }
                         None => return Err(Error::GatewayClosed),
                     }
                 }
@@ -586,6 +605,7 @@ impl PlayerTask {
             }
         }
 
+        info!("normal disconnect");
         Ok(())
     }
 

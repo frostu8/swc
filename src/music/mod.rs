@@ -12,7 +12,8 @@ pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
 use rand::SeedableRng;
-use tracing::{instrument, error, debug_span};
+use tokio::time::{Instant, sleep_until};
+use tracing::{instrument, error, info};
 use twilight_model::channel::message::Embed;
 use twilight_model::channel::message::embed::EmbedThumbnail;
 
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Display, Formatter, Write as _};
 use std::iter::once;
+use std::time::Duration;
 
 use rand::{rngs::SmallRng, seq::SliceRandom};
 
@@ -46,6 +48,9 @@ use twilight_model::{
 };
 
 use tokio::sync::RwLock;
+
+/// How long the bot will wait in an empty voice channel until disconnecting.
+pub const AUTODISCONNECT_TIME: Duration = Duration::from_secs(900);
 
 /// A music server is a shardable server for music queues.
 pub struct QueueServer {
@@ -166,6 +171,8 @@ impl Queue {
             command_rx,
             gateway_rx,
 
+            autodisconnect: AutoDisconnect::default(),
+
             track_queue: VecDeque::default(),
             playing: None,
 
@@ -189,18 +196,21 @@ struct QueueState {
     command_rx: UnboundedReceiver<Command>,
     gateway_rx: UnboundedReceiver<GatewayEvent>,
 
+    autodisconnect: AutoDisconnect,
+
     track_queue: VecDeque<Track>,
     playing: Option<Track>,
 
     rng: SmallRng,
 }
 
-type QueryResult = Result<YtdlQuery, QueryError>;
-
-struct PlayerState {
-    player: Player,
-    event_rx: UnboundedReceiver<voice::Event>,
+#[derive(Debug)]
+struct QueryInfo {
+    query: YtdlQuery,
+    playnow: bool,
 }
+
+type QueryResult = Result<QueryInfo, QueryError>;
 
 impl QueueState {
     #[instrument(name = "queue_handle_command", skip(self))]
@@ -208,10 +218,12 @@ impl QueueState {
         let Command { data, action } = command;
 
         let res = match action {
-            Action::Play(track) => self.play(&data, track).await,
+            Action::Play(track, playnow) => self.play(&data, track, playnow).await,
             Action::Skip => self.skip(&data).await,
             Action::Queue => self.queue(&data).await,
             Action::Shuffle => self.shuffle(&data).await,
+            Action::Disconnect => self.command_disconnect(&data).await,
+            Action::AutoDisconnect(op) => self.autodisconnect(&data, op).await,
         };
 
         if let Err(err) = res {
@@ -227,6 +239,7 @@ impl QueueState {
         &mut self,
         command: &CommandData,
         query: String,
+        playnow: bool,
     ) -> Result<(), UserError> {
         match self.check_user_in_channel(command.user_id).await {
             // user is in the same channel
@@ -242,8 +255,13 @@ impl QueueState {
 
         self.query_queue.enqueue(
             command.clone(),
-            |_| async move {
-                YtdlQuery::query(&query).await
+            move |_| async move {
+                YtdlQuery::query(&query)
+                    .await
+                    .map(|query| QueryInfo {
+                        query,
+                        playnow,
+                    })
             }
         ).await;
 
@@ -338,6 +356,8 @@ impl QueueState {
         &mut self,
         command: &CommandData,
     ) -> Result<(), UserError> {
+        self.check_user_in_channel(command.user_id).await?;
+
         let queue_slice = self.track_queue.make_contiguous();
 
         queue_slice.shuffle(&mut self.rng);
@@ -345,6 +365,53 @@ impl QueueState {
         let _ = command
             .respond(&self.queue_server.http_client)
             .content("shuffled music queue")
+            .respond()
+            .await;
+
+        Ok(())
+    }
+
+    async fn command_disconnect(
+        &mut self,
+        command: &CommandData,
+    ) -> Result<(), UserError> {
+        self.check_user_in_channel(command.user_id).await?;
+
+        self.disconnect().await;
+
+        let _ = command
+            .respond(&self.queue_server.http_client)
+            .content("disconnected!")
+            .respond()
+            .await;
+
+        Ok(())
+    }
+
+    async fn autodisconnect(
+        &mut self,
+        command: &CommandData,
+        op: Option<bool>,
+    ) -> Result<(), UserError> {
+        self.check_user_in_channel(command.user_id).await?;
+
+        let enabled = match op {
+            Some(enabled) => enabled,
+            None => !self.autodisconnect.enabled,
+        };
+
+        self.autodisconnect.enabled = enabled;
+
+        let msg = if enabled {
+            format!("autodisconnect has been enabled, \
+                will autodisconnect after {:?}", AUTODISCONNECT_TIME)
+        } else {
+            String::from("autodisconnect has been disabled")
+        };
+
+        let _ = command
+            .respond(&self.queue_server.http_client)
+            .content(msg)
             .respond()
             .await;
 
@@ -388,7 +455,9 @@ impl QueueState {
         } = result;
 
         match message {
-            Ok(query) => self.play_after_query(&command, query).await,
+            Ok(QueryInfo { query, playnow }) => {
+                self.play_after_query(&command, query, playnow).await
+            }
             Err(err) => {
                 let _ = command
                     .respond(&self.queue_server.http_client)
@@ -400,7 +469,12 @@ impl QueueState {
     }
 
     /// Executes the final result of a play command and their query.
-    async fn play_after_query(&mut self, command: &CommandData, query: YtdlQuery) {
+    async fn play_after_query(
+        &mut self,
+        command: &CommandData,
+        query: YtdlQuery,
+        playnow: bool,
+    ) {
         match query {
             YtdlQuery::Track(track) => {
                 let _ = command
@@ -413,7 +487,11 @@ impl QueueState {
                     .await;
 
                 // enqueue track
-                self.place_tracks(once(track));
+                if playnow {
+                    self.place_tracks_front(once(track));
+                } else {
+                    self.place_tracks(once(track));
+                }
             }
             YtdlQuery::Playlist(playlist) => {
                 let _ = command
@@ -426,7 +504,11 @@ impl QueueState {
                     .await;
 
                 // enqueue track
-                self.place_tracks(playlist.tracks);
+                if playnow {
+                    self.place_tracks_front(playlist.tracks);
+                } else {
+                    self.place_tracks(playlist.tracks);
+                }
             }
         }
     }
@@ -440,6 +522,33 @@ impl QueueState {
     pub fn place_tracks(&mut self, tracks: impl IntoIterator<Item = Track>) {
         let mut tracks = tracks.into_iter();
 
+        self.pull_track_if_not_playing(&mut tracks);
+
+        // place other tracks on queue
+        self.track_queue.extend(tracks);
+    }
+
+    /// Enqueues a track onto the player at the front.
+    /// 
+    /// Starts playing the song immediately if there is no song playing.
+    /// Otherwise, enqueue the track on the queue.
+    /// 
+    /// To enqueue one track, use [`std::iter::once`].
+    pub fn place_tracks_front(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        let mut tracks = tracks.into_iter();
+
+        self.pull_track_if_not_playing(&mut tracks);
+
+        // place other tracks on front (there is no ExtendFront)
+        for track in tracks {
+            self.track_queue.push_front(track);
+        }
+    }
+
+    fn pull_track_if_not_playing<T>(&mut self, tracks: &mut T)
+    where
+        T: Iterator<Item = Track>,
+    {
         if self.playing.is_none() {
             if let Some(track) = tracks.next() {
                 // get player
@@ -452,9 +561,6 @@ impl QueueState {
                 self.playing = Some(track);
             }
         }
-
-        // place other tracks on queue
-        self.track_queue.extend(tracks);
     }
 
     /// Skips the current track by stopping the player.
@@ -518,6 +624,61 @@ impl QueueState {
             .unwrap();
     }
 
+    /// Disconnects the bot.
+    #[instrument(name = "disconnect_channel", skip(self))]
+    pub async fn disconnect(&mut self) {
+        // drop player
+        if let Some(player) = self.player.as_ref() {
+            let _ = player.player.disconnect();
+            self.player = None;
+        }
+
+        // clear stuff
+        self.playing = None;
+        self.track_queue.clear();
+
+        self.queue_server
+            .gateway
+            .command(
+                &UpdateVoiceState::new(self.guild_id, None, false, false),
+            )
+            .unwrap();
+    }
+
+    async fn check_autodisconnect(&mut self) {
+        let Some(voice_state) = self.voice_state().await else {
+            return;
+        };
+
+        let Some(channel_id) = voice_state.channel_id else {
+            return;
+        };
+
+        // count all users in channel
+        let voice_states = self
+            .queue_server
+            .cache
+            .voice_channel_states(channel_id);
+
+        let Some(voice_states) = voice_states else {
+            return;
+        };
+
+        let user_count = voice_states
+            .filter(|state| state.user_id() == self.queue_server.user_id)
+            .count();
+
+        // true rust moment
+        drop(voice_state);
+
+        if user_count == 0 {
+            info!("autodisconnect set");
+            self.autodisconnect.start();
+        } else {
+            self.autodisconnect.stop();
+        }
+    }
+
     fn unwrap_player(&self) -> &Player {
         let PlayerState { player, .. } = self
             .player
@@ -543,11 +704,62 @@ impl QueueState {
     }
 }
 
+struct PlayerState {
+    player: Player,
+    event_rx: UnboundedReceiver<voice::Event>,
+}
+
+impl PlayerState {
+    async fn next_event(player: Option<&mut PlayerState>) -> Option<voice::Event> {
+        if let Some(player) = player {
+            player.event_rx.recv().await
+        } else {
+            std::future::pending().await
+        }
+    }
+}
+
+struct AutoDisconnect {
+    enabled: bool,
+    disconnect_at: Option<Instant>,
+}
+
+impl AutoDisconnect {
+    /// Starts the autodisconnect if the `AutoDisconnect` is enabled
+    pub fn start(&mut self) {
+        if self.enabled {
+            self.disconnect_at = Some(Instant::now() + AUTODISCONNECT_TIME);
+        }
+    }
+
+    /// Stops the autodisconnect.
+    pub fn stop(&mut self) {
+        self.disconnect_at = None;
+    }
+
+    /// Returns a future that resolves when the disconnect timer is up.
+    pub async fn should_disconnect(&mut self) {
+        if let Some(disconnect_at) = self.disconnect_at {
+            sleep_until(disconnect_at).await;
+
+            self.disconnect_at = None;
+        } else {
+            std::future::pending().await
+        }
+    }
+}
+
+impl Default for AutoDisconnect {
+    fn default() -> AutoDisconnect {
+        AutoDisconnect {
+            enabled: true,
+            disconnect_at: None,
+        }
+    }
+}
+
 async fn queue_run(mut state: QueueState) {
     loop {
-        let span = debug_span!("queue_run");
-        let _span = span.enter();
-
         tokio::select! {
             biased;
 
@@ -564,14 +776,23 @@ async fn queue_run(mut state: QueueState) {
                 //tracing::debug!(?event, "got voice gateway event");
 
                 if let Some(PlayerState { player, .. }) = state.player.as_mut() {
-                    let _ = match event {
-                        GatewayEvent::VoiceStateUpdate(ev) => player.voice_state_update(ev),
-                        GatewayEvent::VoiceServerUpdate(ev) => player.voice_server_update(ev),
-                    };
+                    match event {
+                        GatewayEvent::VoiceStateUpdate(ev) => {
+                            if ev.user_id == state.queue_server.user_id {
+                                let _ = player.voice_state_update(ev);
+                            }
+
+                            // check for autodisconnect
+                            state.check_autodisconnect().await;
+                        }
+                        GatewayEvent::VoiceServerUpdate(ev) => {
+                            let _ = player.voice_server_update(ev);
+                        }
+                    }
                 }
             },
             // low level voice event
-            Some(event) = voice_event(state.player.as_mut()) => {
+            Some(event) = PlayerState::next_event(state.player.as_mut()) => {
                 //tracing::debug!(?event, "got player event");
 
                 match event.kind {
@@ -588,15 +809,11 @@ async fn queue_run(mut state: QueueState) {
                     }
                 };
             }
+            // wait for autodisconnect
+            _ = state.autodisconnect.should_disconnect(), if state.player.is_some() => {
+                state.disconnect().await;
+            }
         }
-    }
-}
-
-async fn voice_event(player: Option<&mut PlayerState>) -> Option<voice::Event> {
-    if let Some(player) = player {
-        player.event_rx.recv().await
-    } else {
-        std::future::pending().await
     }
 }
 

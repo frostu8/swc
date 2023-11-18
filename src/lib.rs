@@ -80,8 +80,21 @@ pub fn commands() -> Vec<Command> {
             ],
             ..command("play", "play a music track")
         },
+        Command {
+            options: vec![
+                command_option(CommandOptionType::String, "query", "the url or query of the track"),
+            ],
+            ..command("playnow", "play a music track and moves it to the top of the queue")
+        },
         command("skip", "skips the currently playing song"),
         command("queue", "lists the current music queue"),
         command("shuffle", "shuffles the music queue"),
+        command("disconnect", "disconnects the music bot"),
+        Command {
+            options: vec![
+                command_option(CommandOptionType::Boolean, "setting", "whether to autodisconnect or not"),
+            ],
+            ..command("autodisconnect", "sets the autodisconnect setting; omit setting to toggle")
+        },
     ]
 }

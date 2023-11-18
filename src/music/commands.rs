@@ -40,13 +40,17 @@ pub struct CommandData {
 #[derive(Debug)]
 pub enum Action {
     /// Plays a track, with a URL to query YTDL with.
-    Play(String),
+    Play(String, bool),
     /// Skips the currently playing track.
     Skip,
     /// Lists all of the tracks in a queue.
     Queue,
     /// Shuffles the tracks in a queue.
     Shuffle,
+    /// Disconnects the bot.
+    Disconnect,
+    /// Sets the autodisconnect flag.
+    AutoDisconnect(Option<bool>),
 }
 
 impl CommandData {

@@ -126,19 +126,21 @@ async fn handle_command(
     };
 
     match &*data.name {
-        "play" => {
+        "play" | "playnow" => {
             // first argument is the query
             let query = data
                 .options
                 .cast::<String>(0)
                 .expect("invalid command schema");
 
+            let playnow = matches!(&*data.name, "playnow");
+
             // send to the queue
             queue_server.command(
                 guild_id,
                 music::Command {
                     data: command_data,
-                    action: music::Action::Play(query),
+                    action: music::Action::Play(query, playnow),
                 },
             ).await;
         }
@@ -169,6 +171,35 @@ async fn handle_command(
                 music::Command {
                     data: command_data,
                     action: music::Action::Shuffle,
+                },
+            ).await;
+        }
+        "disconnect" => {
+            // send to the queue
+            queue_server.command(
+                guild_id,
+                music::Command {
+                    data: command_data,
+                    action: music::Action::Disconnect,
+                },
+            ).await;
+        }
+        "autodisconnect" => {
+            let option = if data.options.len() > 0 {
+                Some(data
+                    .options
+                    .cast::<bool>(0)
+                    .expect("invalid command schema"))
+            } else {
+                None
+            };
+
+            // send to the queue
+            queue_server.command(
+                guild_id,
+                music::Command {
+                    data: command_data,
+                    action: music::Action::AutoDisconnect(option),
                 },
             ).await;
         }
@@ -203,7 +234,7 @@ async fn wait_for_ready(
             // setup commands
             http_client
                 .interaction(ready.application.id)
-                .set_guild_commands(Id::new(952331087714070548), &swc::commands())
+                .set_guild_commands(Id::new(683483117473759249), &swc::commands())
                 //.set_global_commands(&swc::commands())
                 .await
                 .unwrap();

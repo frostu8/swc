@@ -22,12 +22,13 @@ use async_tungstenite::{
 };
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::de::DeserializeSeed as _;
-use tungstenite::protocol::Message;
+use tungstenite::protocol::{Message, CloseFrame};
 use twilight_model::id::{
     marker::{GuildMarker, UserMarker},
     Id,
 };
 
+use std::borrow::Cow;
 use std::fmt::Debug;
 
 use tracing::{instrument, warn, error, info, debug, debug_span};
@@ -325,6 +326,19 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    /// Disconnects gracefully from the gateway.
+    /// 
+    /// The websocket should not be used after this.
+    /// 
+    /// # Panics
+    /// Panics if closing the socket failed.
+    pub async fn disconnect(&mut self) {
+        self.wss.close(Some(CloseFrame {
+            code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+            reason: Cow::Borrowed("Disconnected from gateway"),
+        })).await.unwrap();
     }
 }
 

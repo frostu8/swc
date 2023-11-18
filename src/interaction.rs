@@ -77,6 +77,15 @@ impl<'a> CommandOptionType<'a> for String {
     }
 }
 
+impl<'a> CommandOptionType<'a> for bool {
+    fn cast_from(value: &'a CommandOptionValue) -> Result<bool, CastError> {
+        match value {
+            CommandOptionValue::Boolean(data) => Ok(*data),
+            _ => Err(CastError),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CastError;
 
