@@ -4,7 +4,7 @@ use super::constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX, SILENCE_FRAME};
 use super::rtp::{Socket, Packet};
 use super::{Source, Error};
 
-use tracing::{instrument, warn, debug_span};
+use tracing::{warn, debug_span};
 
 use tokio::time::{Instant, Duration, sleep_until, timeout_at};
 
@@ -73,7 +73,6 @@ impl PacketStreamer {
     ///
     /// This future is intended to be cancelled, as it will not return unless
     /// there's an error or the status of packet flow changes.
-    #[instrument]
     pub async fn stream(
         &mut self,
         rtp: &mut Socket,
@@ -128,6 +127,9 @@ impl PacketStreamer {
                 // slow, which it is, but not slow enough that it messes with
                 // Opus passthrough).
                 //
+                // UPDATE 2: It is WSL.
+                // https://github.com/microsoft/WSL/issues/10006
+                //
                 // It is little inconsistencies like this that remind me that
                 // WSL will never be a perfect emulaion of Linux.
                 self.next_packet = self.next_packet + TIMESTEP_LENGTH;
@@ -145,7 +147,6 @@ impl PacketStreamer {
     ///
     /// This will mark the `self.ready` flag so that the read packet can now
     /// be processed.
-    #[instrument(level = "trace")]
     async fn next(&mut self, ssrc: u32) -> Result<Option<Status>, Error> {
         if self.silence_frames > 0 {
             self.silence_frames -= 1;
@@ -176,7 +177,6 @@ impl PacketStreamer {
     /// Polls for the next packet from the source.
     ///
     /// This will wait until the source is ready.
-    #[instrument(level = "trace")]
     async fn next_from_source(&mut self, ssrc: u32) -> Result<Option<Status>, Error> {
         let Some(source) = self.source.as_mut() else {
             // there is no source, wait

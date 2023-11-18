@@ -140,7 +140,7 @@ impl Connection {
     /// for more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-    #[instrument(name = "voice_websocket_handshake", skip(self))]
+    #[instrument(name = "voice_handshake", skip(self))]
     async fn handshake(&mut self) -> Result<Socket, Error> {
         debug!(?self.session, "setting up connection");
 
@@ -288,7 +288,7 @@ impl Connection {
     /// [discord's docs][1] for more information.
     ///
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-    #[instrument(name = "voice_websocket_resume", skip(self))]
+    #[instrument(name = "voice_resume", skip(self))]
     async fn resume(&mut self) -> Result<(), Error> {
         let (wss, _response) = connect_async(format!("wss://{}/?v=4", self.session.endpoint)).await?;
 
@@ -329,7 +329,6 @@ impl Connection {
 }
 
 /// Receives a gateway event from the server.
-#[instrument(skip(wss))]
 async fn recv(
     mut wss: impl Stream<Item = Result<Message, tungstenite::error::Error>> + Unpin,
 ) -> Option<Result<GatewayEvent, Error>> {
@@ -378,7 +377,6 @@ async fn recv(
 }
 
 /// Sends a gateway event to the server.
-#[instrument(skip(wss))]
 async fn send(
     mut wss: impl Sink<Message, Error = tungstenite::error::Error> + Unpin,
     ev: &GatewayEvent,

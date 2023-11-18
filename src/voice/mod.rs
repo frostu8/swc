@@ -96,7 +96,7 @@ pub use source::Source;
 
 use streamer::{Status, PacketStreamer};
 
-use tracing::{error, debug, instrument, debug_span};
+use tracing::{error, debug, instrument, warn};
 
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
@@ -337,9 +337,6 @@ impl PlayerTask {
         let mut vstu: Option<Box<VoiceStateUpdate>> = None;
         let mut vseu: Option<VoiceServerUpdate> = None;
 
-        let span = tracing::debug_span!("wait_for_gateway");
-        let _span = span.enter();
-
         while let Ok(Some(ev)) = timeout_at(deadline, gateway_rx.recv()).await {
             match ev {
                 GatewayEvent::VoiceStateUpdate(ev) if ev.0.user_id == state.user_id => {
@@ -373,11 +370,6 @@ impl PlayerTask {
         } else {
             return Err(Error::CannotJoin);
         };
-
-        drop(_span);
-
-        let span = tracing::debug_span!("establishing_connection");
-        let _span = span.enter();
 
         let (ws, rtp) = timeout_at(deadline, Connection::connect(session))
             .await
@@ -439,6 +431,29 @@ impl PlayerTask {
         }
     }
 
+    #[instrument(skip(self))]
+    async fn wait_for_gateway(&mut self) -> Result<(), Error> {
+        warn!("disconnected; waiting for gateway");
+
+        let deadline = Instant::now() + Duration::from_millis(5000);
+
+        loop {
+            match timeout_at(deadline, self.gateway_rx.recv()).await {
+                Ok(Some(GatewayEvent::VoiceServerUpdate(vseu))) => {
+                    // server update; reconnect
+                    self.voice_server_update(vseu).await?;
+                    return Ok(());
+                }
+                Ok(Some(GatewayEvent::VoiceStateUpdate(vstu))) if vstu.0.user_id == self.state.user_id => {
+                    *self.state.voice_state.write().await = vstu.0;
+                }
+                Ok(Some(GatewayEvent::VoiceStateUpdate(_))) => (),
+                Ok(None) => return Err(Error::GatewayClosed),
+                Err(_) => return Err(Error::Timeout),
+            }
+        }
+    }
+
     async fn set_playing(&mut self, playing: bool) {
         if self.state.playing.fetch_xor(playing, Ordering::Acquire) {
             self.state.playing.store(playing, Ordering::Release);
@@ -458,7 +473,6 @@ impl PlayerTask {
     /// Runs the task, consuming it.
     ///
     /// **Do not call this on the main thread, as it will not terminate.**
-    #[instrument(skip(self))]
     pub async fn run(mut self) {
         if let Err(err) = self.run_inner().await {
             let _ = self.event_tx.send(Event {
@@ -475,11 +489,9 @@ impl PlayerTask {
         }
     }
 
+    #[instrument("player_loop", skip(self))]
     async fn run_inner(&mut self) -> Result<(), Error> {
         loop {
-            let span = debug_span!("run_inner");
-            let _span = span.enter();
-
             tokio::select! {
                 biased;
 
@@ -489,6 +501,11 @@ impl PlayerTask {
                         Some(Ok(ev)) => {
                             // discard event
                             debug!("voice ev: {:?}", ev);
+                        }
+                        Some(Err(err)) if err.disconnected() => {
+                            // normal disconnect event
+                            // wait for gateway notification
+                            self.wait_for_gateway().await?;
                         }
                         Some(Err(err)) if err.can_resume() => {
                             // normal disconnect event
@@ -583,16 +600,8 @@ impl PlayerTask {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn voice_server_update(&mut self, vseu: VoiceServerUpdate) -> Result<(), Error> {
-        tracing::debug!(
-            guild_id = self.state.guild_id.get(),
-            user_id = self.state.user_id.get(),
-            endpoint = vseu.endpoint.as_ref().unwrap(),
-            token = vseu.token,
-            session_id = self.ws.session().session_id,
-            "reconnecting to voice gateway",
-        );
-
         let session = Session {
             guild_id: self.state.guild_id,
             user_id: self.state.user_id,

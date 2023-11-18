@@ -203,7 +203,7 @@ struct PlayerState {
 }
 
 impl QueueState {
-    #[instrument(name = "QueueState::handle_command", skip(self))]
+    #[instrument(name = "queue_handle_command", skip(self))]
     pub async fn handle_command(&mut self, command: Command) {
         let Command { data, action } = command;
 
@@ -355,7 +355,7 @@ impl QueueState {
     /// 
     /// A user can use a music control command if the user is in the same
     /// channel as the bot.
-    #[instrument(name = "QueueState::check_user_in_channel", skip(self))]
+    #[instrument(name = "check_user_in_channel", skip(self))]
     async fn check_user_in_channel(
         &self,
         user_id: Id<UserMarker>,
@@ -380,7 +380,7 @@ impl QueueState {
         }
     }
 
-    #[instrument(name = "QueueState::handle_query", skip(self))]
+    #[instrument(name = "handle_query", skip(self))]
     pub async fn handle_query(&mut self, result: QueryMessage<QueryResult>) {
         let QueryMessage {
             data: command,
@@ -493,7 +493,7 @@ impl QueueState {
     }
 
     /// Joins or moves the bot to a Discord channel.
-    #[instrument(name = "QueueState::join", skip(self))]
+    #[instrument(name = "join_channel", skip(self))]
     pub async fn join(&mut self, channel_id: Id<ChannelMarker>) {
         let voice_state = self.voice_state().await;
         if let Some(voice_state) = voice_state {
