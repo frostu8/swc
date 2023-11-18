@@ -800,6 +800,13 @@ async fn queue_run(mut state: QueueState) {
                     }
                     voice::EventType::Error(err) => {
                         error!(%err, "audio");
+
+                        // clear queue
+                        state.playing = None;
+                        state.track_queue.clear();
+
+                        // drop player
+                        state.player = None;
                     }
                     voice::EventType::Playing => {
                     }
