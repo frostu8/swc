@@ -53,6 +53,7 @@ impl PacketStreamer {
     }
 
     /// Checks if the streamer has a source.
+    #[allow(dead_code)]
     pub fn has_source(&self) -> bool {
         self.source.is_some()
     }
@@ -220,6 +221,7 @@ impl PacketStreamer {
             // clean up
             self.take_source().unwrap().close().await?;
             self.wait_for_source();
+            return Ok(Some(Status::SourceStopped));
         }
 
         // if the source is finally returning, we can send a start signal
@@ -250,5 +252,7 @@ pub enum Status {
     /// There is a break in transmission, packets have stopped streaming, with
     /// the last packet's `ssrc`.
     Stopped(u32),
+    /// The source that was playing has stopped.
+    SourceStopped,
 }
 

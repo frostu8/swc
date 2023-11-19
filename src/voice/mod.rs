@@ -455,6 +455,11 @@ impl PlayerTask {
                     return Ok(());
                 }
                 Ok(Some(GatewayEvent::VoiceStateUpdate(vstu))) if vstu.0.user_id == self.state.user_id => {
+                    if vstu.0.channel_id == None {
+                        info!("normal disconnect");
+                        return Err(Error::Disconnected);
+                    }
+
                     *self.state.voice_state.write().await = vstu.0;
                 }
                 Ok(Some(GatewayEvent::VoiceStateUpdate(_))) => (),
@@ -485,7 +490,7 @@ impl PlayerTask {
     /// **Do not call this on the main thread, as it will not terminate.**
     pub async fn run(mut self) {
         if let Err(err) = self.run_inner().await {
-            if matches!(err, Error::GatewayClosed) {
+            if matches!(err, Error::GatewayClosed | Error::Disconnected) {
                 info!("normal disconnect event");
             }
 
@@ -554,6 +559,8 @@ impl PlayerTask {
                             // start new source
                             //self.streamer.add_silence(5);
                             self.streamer.source(source);
+
+                            self.set_playing(true).await;
                         }
                         Some(Command::Pause) => {
                             //self.set_playing(false).await?;
@@ -565,6 +572,7 @@ impl PlayerTask {
                         }
                         Some(Command::Stop) => {
                             self.close_source().await?;
+                            self.set_playing(false).await;
                         }
                         Some(Command::Disconnect) => {
                             // disconnect
@@ -585,8 +593,6 @@ impl PlayerTask {
                                 delay: Some(0),
                             })
                             .await?;
-
-                            self.set_playing(true).await;
                         }
                         Status::Stopped(ssrc) => {
                             self.ws.send(Speaking {
@@ -595,10 +601,9 @@ impl PlayerTask {
                                 delay: Some(0),
                             })
                             .await?;
-
-                            if !self.streamer.has_source() {
-                                self.set_playing(false).await;
-                            }
+                        }
+                        Status::SourceStopped => {
+                            self.set_playing(false).await;
                         }
                     }
                 }

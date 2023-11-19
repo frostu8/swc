@@ -13,7 +13,7 @@ pub use commands::{Action, Command, CommandData};
 use query::{QueryQueue, QueryResult as QueryMessage};
 use rand::SeedableRng;
 use tokio::time::{Instant, sleep_until};
-use tracing::{instrument, error, info};
+use tracing::{instrument, error, debug};
 use twilight_model::channel::message::Embed;
 use twilight_model::channel::message::embed::EmbedThumbnail;
 
@@ -665,14 +665,14 @@ impl QueueState {
         };
 
         let user_count = voice_states
-            .filter(|state| state.user_id() == self.queue_server.user_id)
+            .filter(|state| state.user_id() != self.queue_server.user_id)
             .count();
 
         // true rust moment
         drop(voice_state);
 
         if user_count == 0 {
-            info!("autodisconnect set");
+            debug!("autodisconnect set");
             self.autodisconnect.start();
         } else {
             self.autodisconnect.stop();
