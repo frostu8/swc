@@ -571,6 +571,9 @@ impl QueueState {
 
         if player.playing() {
             player.stop().unwrap();
+        } else {
+            // do not wait for stop event and enqueue new song now
+            self.next_track();
         }
     }
 
