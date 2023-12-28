@@ -232,8 +232,8 @@ async fn wait_for_ready(
             // setup commands
             http_client
                 .interaction(ready.application.id)
-                .set_guild_commands(Id::new(683483117473759249), &swc::commands())
-                //.set_global_commands(&swc::commands())
+                //.set_guild_commands(Id::new(683483117473759249), &swc::commands())
+                .set_global_commands(&swc::commands())
                 .await
                 .unwrap();
 
