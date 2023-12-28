@@ -8,13 +8,13 @@ use serde::{
     ser::{SerializeStruct as _, Serializer},
     Deserialize, Serialize,
 };
+use serde_json::Value;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::fmt::{self, Debug, Display, Formatter};
 use twilight_model::id::{
     marker::{GuildMarker, UserMarker},
     Id,
 };
-use serde_json::Value;
 
 /// Raw gateway event.
 #[derive(Debug)]
@@ -197,7 +197,9 @@ impl<'de> DeserializeSeed<'de> for GatewayEventDeserializer {
                     OpCode::HeartbeatAck => self.get_d(map).map(GatewayEvent::HeartbeatAck),
                     OpCode::Resume => self.get_d(map).map(GatewayEvent::Resume),
                     OpCode::Hello => self.get_d(map).map(GatewayEvent::Hello),
-                    OpCode::Resumed => self.get_d::<Option::<Value>, _>(map).map(|_| GatewayEvent::Resumed),
+                    OpCode::Resumed => self
+                        .get_d::<Option<Value>, _>(map)
+                        .map(|_| GatewayEvent::Resumed),
                     OpCode::ClientConnect => self.get_d(map).map(GatewayEvent::ClientConnect),
                     OpCode::ClientDisconnect => self.get_d(map).map(GatewayEvent::ClientDisconnect),
                 }
@@ -383,18 +385,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_opcode_resume()
-    {
+    fn test_opcode_resume() {
         const PAYLOAD: &'static str = r#"{"op":9,"d":null}"#;
 
-        let event = GatewayEventDeserializer::from_json(&PAYLOAD)
-            .unwrap();
+        let event = GatewayEventDeserializer::from_json(&PAYLOAD).unwrap();
 
         let mut json = serde_json::Deserializer::from_str(&PAYLOAD);
 
-        let event = event
-            .deserialize(&mut json)
-            .unwrap();
+        let event = event.deserialize(&mut json).unwrap();
 
         assert!(matches!(event, GatewayEvent::Resumed));
     }

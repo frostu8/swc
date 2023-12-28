@@ -1,7 +1,7 @@
 //! Low-level RTP protocol types.
 
-pub mod error;
 mod crypto;
+pub mod error;
 
 pub use crypto::{EncryptionMode, Encryptor};
 pub use error::Error;
@@ -87,7 +87,10 @@ impl<T> Packet<T> {
     /// The size of the RTP packet header.
     ///
     /// This also includes space for the Poly1305 tag at the front.
-    pub const HEADER_LEN: usize = 12 + TAG_SIZE;
+    pub const HEADER_LEN: usize = Self::HEADER_LEN_NO_TAG + TAG_SIZE;
+
+    /// The size of the RTP packet header, without the Poly1305 tag.
+    pub const HEADER_LEN_NO_TAG: usize = 12;
 
     /// The payload len of the RTP packet.
     ///
@@ -156,17 +159,17 @@ where
 
     /// Sets the sequence number of the RTP packet.
     pub fn set_sequence(&mut self, sequence: u16) {
-        (&mut self.pkt.as_mut()[2..4]).copy_from_slice(&sequence.to_be_bytes());
+        self.pkt.as_mut()[2..4].copy_from_slice(&sequence.to_be_bytes());
     }
 
     /// Sets the timestamp of the RTP packet.
     pub fn set_timestamp(&mut self, timestamp: u32) {
-        (&mut self.pkt.as_mut()[4..8]).copy_from_slice(&timestamp.to_be_bytes());
+        self.pkt.as_mut()[4..8].copy_from_slice(&timestamp.to_be_bytes());
     }
 
     /// Sets the SSRC of the RTP packet.
     pub fn set_ssrc(&mut self, ssrc: u32) {
-        (&mut self.pkt.as_mut()[8..12]).copy_from_slice(&ssrc.to_be_bytes());
+        self.pkt.as_mut()[8..12].copy_from_slice(&ssrc.to_be_bytes());
     }
 
     /// Returns a mutable reference to the Poly1305 tag.
@@ -212,15 +215,15 @@ pub async fn ip_discovery(udp: &UdpSocket, ssrc: u32) -> Result<SocketAddr, IpDi
 
     // create IP discovery packet
     let mut buf = [0u8; 74];
-    (&mut buf[..4]).copy_from_slice(REQ_HEADER);
-    (&mut buf[4..8]).copy_from_slice(&ssrc.to_be_bytes());
+    buf[..4].copy_from_slice(REQ_HEADER);
+    buf[4..8].copy_from_slice(&ssrc.to_be_bytes());
 
     // send over udp socket
     udp.send(&buf).await.map_err(IpDiscoveryError::Io)?;
 
     // wait for response
     match udp.recv(&mut buf).await {
-        Ok(size) if size == 74 => {
+        Ok(74) => {
             // check header
             if &buf[..4] != RES_HEADER {
                 let mut header = [0u8; 4];

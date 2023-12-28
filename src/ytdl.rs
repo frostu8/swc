@@ -1,15 +1,13 @@
 //! Types helpful for interacting with the youtube-dl command line.
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
-use std::process::Stdio;
 use std::fmt::{self, Display, Formatter};
+use std::process::Stdio;
 use std::sync::OnceLock;
 
-use twilight_model::channel::message::embed::{
-    Embed, EmbedAuthor, EmbedThumbnail,
-};
+use twilight_model::channel::message::embed::{Embed, EmbedAuthor, EmbedThumbnail};
 
 use serde::Deserialize;
 
@@ -21,12 +19,14 @@ static YTDL_EXECUTABLE: OnceLock<String> = OnceLock::new();
 
 /// The `youtube-dl` executable.
 pub fn ytdl_executable() -> &'static str {
-    YTDL_EXECUTABLE.get().expect("ytdl executable initialized at startup")
+    YTDL_EXECUTABLE
+        .get()
+        .expect("ytdl executable initialized at startup")
 }
 
 pub fn init_ytdl_executable<F>(f: F) -> &'static str
 where
-    F: FnOnce() -> String
+    F: FnOnce() -> String,
 {
     YTDL_EXECUTABLE.get_or_init(f)
 }
@@ -53,7 +53,7 @@ impl Query {
     #[instrument(name = "Query::query")]
     pub async fn query(query: &str) -> Result<Query, QueryError> {
         let mut ytdl = Command::new(ytdl_executable())
-            .args(&["--yes-playlist", "--flat-playlist", "-J", query])
+            .args(["--yes-playlist", "--flat-playlist", "-J", query])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -63,9 +63,7 @@ impl Query {
         let stdout = ytdl.stdout.take().unwrap();
         let stderr = ytdl.stderr.take().unwrap();
 
-        async fn read_to_end(
-            mut stream: impl AsyncRead + Unpin,
-        ) -> Result<String, std::io::Error> {
+        async fn read_to_end(mut stream: impl AsyncRead + Unpin) -> Result<String, std::io::Error> {
             let mut out = String::new();
             stream.read_to_string(&mut out).await.map(|_| out)
         }
@@ -76,23 +74,19 @@ impl Query {
             read_to_end(stdout),
             YtdlError::from_ytdl(BufReader::new(stderr)),
         )
-            .map_err(QueryError::Io)?;
+        .map_err(QueryError::Io)?;
 
         if let Some(err) = err {
             Err(QueryError::Ytdl(err))
+        } else if output_is_playlist(&out) {
+            Query::playlist_from_json(&out)
         } else {
-            if output_is_playlist(&out) {
-                Query::playlist_from_json(&out)
-            } else {
-                // not a playlist, or an error occured
-                Query::track_from_json(&out)
-            }
+            // not a playlist, or an error occured
+            Query::track_from_json(&out)
         }
     }
 
-    fn playlist_from_json(
-        json: &str,
-    ) -> Result<Query, QueryError> {
+    fn playlist_from_json(json: &str) -> Result<Query, QueryError> {
         // parse json data
         #[derive(Deserialize)]
         struct YtdlPlaylist {
@@ -134,16 +128,11 @@ impl Query {
         Ok(Query::Playlist(playlist))
     }
 
-    fn track_from_json(
-        json: &str,
-    ) -> Result<Query, QueryError> {
+    fn track_from_json(json: &str) -> Result<Query, QueryError> {
         // parse json data
-        let track: YtdlQuery = serde_json::from_str(json)
-            .map_err(QueryError::Json)?;
+        let track: YtdlQuery = serde_json::from_str(json).map_err(QueryError::Json)?;
 
-        track
-            .try_into()
-            .map(|track| Query::Track(track))
+        track.try_into().map(Query::Track)
     }
 }
 
@@ -200,7 +189,13 @@ pub struct Track {
 impl Track {
     /// Converts a `Track` to a readable embed.
     pub fn as_embed(&self) -> Embed {
-        let Track { url, title, author, thumbnail_url, .. } = self.clone();
+        let Track {
+            url,
+            title,
+            author,
+            thumbnail_url,
+            ..
+        } = self.clone();
 
         Embed {
             author: Some(EmbedAuthor {
@@ -219,13 +214,12 @@ impl Track {
             provider: None,
             title: Some(title),
             timestamp: None,
-            thumbnail: thumbnail_url
-                .map(|url| EmbedThumbnail {
-                    url: url,
-                    height: None,
-                    width: None,
-                    proxy_url: None,
-                }),
+            thumbnail: thumbnail_url.map(|url| EmbedThumbnail {
+                url,
+                height: None,
+                width: None,
+                proxy_url: None,
+            }),
             url: Some(url),
             video: None,
         }
@@ -233,7 +227,7 @@ impl Track {
 }
 
 impl TryFrom<YtdlQuery> for Track {
-    type Error = QueryError; 
+    type Error = QueryError;
 
     fn try_from(e: YtdlQuery) -> Result<Track, Self::Error> {
         let YtdlQuery {
@@ -252,8 +246,8 @@ impl TryFrom<YtdlQuery> for Track {
         };
 
         // find thumbnail
-        let thumbnail = thumbnail
-            .or_else(|| thumbnails
+        let thumbnail = thumbnail.or_else(|| {
+            thumbnails
                 .unwrap_or_default()
                 .into_iter()
                 .reduce(|acc, t| {
@@ -263,7 +257,8 @@ impl TryFrom<YtdlQuery> for Track {
                         acc
                     }
                 })
-                .map(|t| t.url));
+                .map(|t| t.url)
+        });
 
         // create a track as the result
         Ok(Track {
@@ -326,12 +321,9 @@ impl Playlist {
             title: Some(title),
             timestamp: None,
             thumbnail: thumbnail_url
-                .or_else(|| tracks
-                    .iter()
-                    .next()
-                    .and_then(|t| t.thumbnail_url.clone()))
+                .or_else(|| tracks.first().and_then(|t| t.thumbnail_url.clone()))
                 .map(|url| EmbedThumbnail {
-                    url: url,
+                    url,
                     height: None,
                     width: None,
                     proxy_url: None,
@@ -373,9 +365,9 @@ impl Display for QueryError {
             QueryError::Utf8(err) => Display::fmt(err, f),
             QueryError::Json(err) => Display::fmt(err, f),
             QueryError::Ytdl(err) => Display::fmt(err, f),
-            QueryError::PrivateVideo => f.write_str(
-                "query result is privated or otherwise not visible",
-            ),
+            QueryError::PrivateVideo => {
+                f.write_str("query result is privated or otherwise not visible")
+            }
         }
     }
 }
@@ -413,13 +405,13 @@ impl YtdlError {
         // youtube-dl stderr looks like this:
         // WARNING: warning
         // ERROR: error <-- this is what we want
-        const ERROR_PREFIX: &'static str = "ERROR:";
+        const ERROR_PREFIX: &str = "ERROR:";
 
         let mut lines = stderr.lines();
         while let Some(line) = lines.next_line().await? {
-            if line.starts_with(ERROR_PREFIX) {
+            if let Some(stripped) = line.strip_prefix(ERROR_PREFIX) {
                 return Ok(Some(YtdlError {
-                    message: line[ERROR_PREFIX.len()..].trim().to_owned(),
+                    message: stripped.trim().to_owned(),
                 }));
             }
         }
@@ -440,4 +432,3 @@ impl Display for YtdlError {
 }
 
 impl std::error::Error for YtdlError {}
-

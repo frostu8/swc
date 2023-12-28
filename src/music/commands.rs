@@ -5,15 +5,19 @@ use std::ops::Deref;
 
 use twilight_http::{
     client::{Client as HttpClient, InteractionClient},
-    response::{Response, marker::EmptyBody},
+    response::{marker::EmptyBody, Response},
     Error as HttpError,
 };
 use twilight_model::{
-    channel::{message::{MessageFlags, Embed}, Message},
-    http::interaction::{
-        InteractionResponse, InteractionResponseType, InteractionResponseData,
+    channel::{
+        message::{Embed, MessageFlags},
+        Message,
     },
-    id::{Id, marker::{ApplicationMarker, GuildMarker, InteractionMarker, UserMarker}},
+    http::interaction::{InteractionResponse, InteractionResponseData, InteractionResponseType},
+    id::{
+        marker::{ApplicationMarker, GuildMarker, InteractionMarker, UserMarker},
+        Id,
+    },
 };
 
 /// A single command.
@@ -113,11 +117,10 @@ impl<'a> CommandResponse<'a> {
     }
 
     /// Acks the response.
-    /// 
+    ///
     /// The final message must be updated with [`CommandResponse::update`].
     pub async fn ack(&mut self) -> Result<Response<EmptyBody>, HttpError> {
-        self
-            .client
+        self.client
             .create_response(
                 self.command.interaction_id,
                 &self.command.interaction_token,
@@ -131,8 +134,7 @@ impl<'a> CommandResponse<'a> {
 
     /// Updates the previous message (mostly an ACK).
     pub async fn update(&mut self) -> Result<Response<Message>, HttpError> {
-        self
-            .client
+        self.client
             .update_response(&self.command.interaction_token)
             .content(self.content.as_deref())
             .unwrap()
@@ -143,8 +145,7 @@ impl<'a> CommandResponse<'a> {
 
     /// Responds with a new message.
     pub async fn respond(&mut self) -> Result<Response<EmptyBody>, HttpError> {
-        self
-            .client
+        self.client
             .create_response(
                 self.command.interaction_id,
                 &self.command.interaction_token,
@@ -161,4 +162,3 @@ impl<'a> CommandResponse<'a> {
             .await
     }
 }
-

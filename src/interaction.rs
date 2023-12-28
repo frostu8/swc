@@ -26,7 +26,7 @@ pub trait CommandOptionValueCastExt: Sized {
 impl CommandOptionValueCastExt for CommandDataOption {
     fn cast<'a, T>(&'a self) -> Result<T, CastError>
     where
-        T: CommandOptionType<'a>
+        T: CommandOptionType<'a>,
     {
         T::cast_from(&self.value)
     }
@@ -48,7 +48,7 @@ pub trait CommandOptionValueListCastExt: Sized {
 impl CommandOptionValueListCastExt for Vec<CommandDataOption> {
     fn cast<'a, T>(&'a self, idx: usize) -> Result<T, CastError>
     where
-        T: CommandOptionType<'a>
+        T: CommandOptionType<'a>,
     {
         self.get(idx).ok_or(CastError).and_then(|s| s.cast())
     }
@@ -88,4 +88,3 @@ impl<'a> CommandOptionType<'a> for bool {
 
 #[derive(Debug)]
 pub struct CastError;
-

@@ -86,34 +86,40 @@
 
 pub mod constants;
 pub mod error;
-mod streamer;
 pub mod rtp;
 pub mod source;
+mod streamer;
 pub mod ws;
 
 pub use error::Error;
 pub use source::Source;
 
-use streamer::{Status, PacketStreamer};
+use streamer::{PacketStreamer, Status};
 
-use tracing::{error, debug, instrument, warn, info};
+use tracing::{debug, error, info, instrument, warn};
 
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use rtp::Socket;
 use ws::{payload::Speaking, Connection, Session};
 
-use tokio::task::JoinHandle;
 use tokio::sync::{
-    RwLock, RwLockReadGuard,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
+    RwLock, RwLockReadGuard,
 };
-use tokio::time::{Instant, Duration, timeout_at};
+use tokio::task::JoinHandle;
+use tokio::time::{timeout_at, Duration, Instant};
 
 use twilight_model::{
-    voice::VoiceState,
     gateway::payload::incoming::{VoiceServerUpdate, VoiceStateUpdate},
-    id::{Id, marker::{GuildMarker, UserMarker}},
+    id::{
+        marker::{GuildMarker, UserMarker},
+        Id,
+    },
+    voice::VoiceState,
 };
 
 /// An audio sink that plays audio to a channel.
@@ -148,7 +154,7 @@ impl Player {
         let initial_state = VoiceState {
             channel_id: None,
             guild_id: Some(guild_id),
-            user_id: user_id,
+            user_id,
             deaf: false,
             mute: false,
             self_deaf: false,
@@ -172,12 +178,7 @@ impl Player {
 
         // start player task
         let task = tokio::spawn(async move {
-            let task = PlayerTask::new(
-                state_clone,
-                event_tx,
-                gateway_rx,
-                command_rx,
-            ).await;
+            let task = PlayerTask::new(state_clone, event_tx, gateway_rx, command_rx).await;
 
             match task {
                 Ok(task) => task.run().await,
@@ -227,7 +228,7 @@ impl Player {
     }
 
     /// Disconnects the player.
-    /// 
+    ///
     /// The player should not be used after this.
     pub fn disconnect(&self) -> Result<(), PlayerClosed> {
         self.command_tx
@@ -258,7 +259,8 @@ impl Player {
     ///
     /// You typically shouldn't call this manually.
     pub fn voice_state_update(&self, ev: Box<VoiceStateUpdate>) -> Result<(), PlayerClosed> {
-        self.gateway_tx.send(GatewayEvent::VoiceStateUpdate(ev))
+        self.gateway_tx
+            .send(GatewayEvent::VoiceStateUpdate(ev))
             .map_err(|_| PlayerClosed)
     }
 
@@ -266,7 +268,8 @@ impl Player {
     ///
     /// You typically shouldn't call this manually.
     pub fn voice_server_update(&self, ev: VoiceServerUpdate) -> Result<(), PlayerClosed> {
-        self.gateway_tx.send(GatewayEvent::VoiceServerUpdate(ev))
+        self.gateway_tx
+            .send(GatewayEvent::VoiceServerUpdate(ev))
             .map_err(|_| PlayerClosed)
     }
 }
@@ -323,7 +326,7 @@ struct PlayerTask {
     gateway_rx: UnboundedReceiver<GatewayEvent>,
     command_rx: UnboundedReceiver<Command>,
     event_tx: UnboundedSender<Event>,
-    
+
     ws: Connection,
     rtp: Socket,
 
@@ -351,11 +354,11 @@ impl PlayerTask {
             match ev {
                 GatewayEvent::VoiceStateUpdate(ev) if ev.0.user_id == state.user_id => {
                     vstu = Some(ev);
-                },
+                }
                 GatewayEvent::VoiceServerUpdate(ev) => {
                     vseu = Some(ev);
-                },
-                _ => ()
+                }
+                _ => (),
             };
 
             if vstu.is_some() && vseu.is_some() {
@@ -430,7 +433,7 @@ impl PlayerTask {
                         // update state
                         *self.state.voice_state.write().await = vstu.0;
                     }
-                }
+                },
                 Ok(None) => {
                     return Err(Error::GatewayClosed);
                 }
@@ -454,8 +457,10 @@ impl PlayerTask {
                     self.voice_server_update(vseu).await?;
                     return Ok(());
                 }
-                Ok(Some(GatewayEvent::VoiceStateUpdate(vstu))) if vstu.0.user_id == self.state.user_id => {
-                    if vstu.0.channel_id == None {
+                Ok(Some(GatewayEvent::VoiceStateUpdate(vstu)))
+                    if vstu.0.user_id == self.state.user_id =>
+                {
+                    if vstu.0.channel_id.is_none() {
                         info!("normal disconnect");
                         return Err(Error::Disconnected);
                     }
@@ -643,15 +648,15 @@ impl PlayerTask {
         };
 
         if self.streamer.is_streaming() {
-            self.ws.send(Speaking {
-                speaking: 1,
-                ssrc: self.rtp.ssrc(),
-                delay: Some(0),
-            })
-            .await?;
+            self.ws
+                .send(Speaking {
+                    speaking: 1,
+                    ssrc: self.rtp.ssrc(),
+                    delay: Some(0),
+                })
+                .await?;
         }
 
         Ok(())
     }
 }
-

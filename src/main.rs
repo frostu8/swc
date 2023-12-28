@@ -1,19 +1,16 @@
 use std::{env, sync::Arc};
 
-use swc::music::{self, QueueServer};
 use swc::interaction::ext::*;
+use swc::music::{self, QueueServer};
 
 use tracing_subscriber::EnvFilter;
-use twilight_gateway::{Shard, ShardId, Intents, Config};
-use twilight_http::client::Client;
 use twilight_cache_inmemory::InMemoryCache;
+use twilight_gateway::{Config, Intents, Shard, ShardId};
+use twilight_http::client::Client;
 use twilight_model::{
+    application::interaction::{application_command::CommandData, Interaction, InteractionData},
+    gateway::event::Event,
     id::Id,
-    application::interaction::{
-        application_command::CommandData,
-        Interaction, InteractionData,
-    },
-    gateway::event::Event, 
 };
 
 use tracing::instrument;
@@ -29,8 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
     // init ytdl executable
     swc::ytdl::init_ytdl_executable(|| {
-        env::var("YTDL_EXECUTABLE")
-            .unwrap_or_else(|_| String::from("youtube-dl"))
+        env::var("YTDL_EXECUTABLE").unwrap_or_else(|_| String::from("youtube-dl"))
     });
 
     // initialize discord shard
@@ -40,12 +36,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         env::var("DISCORD_TOKEN")?,
         Intents::GUILDS | Intents::GUILD_VOICE_STATES,
     )
-        /*
-        .event_types(EventTypeFlags::READY
-            | EventTypeFlags::INTERACTION_CREATE
-            | EventTypeFlags::VOICE_STATE_UPDATE
-            | EventTypeFlags::VOICE_SERVER_UPDATE)*/
-        .build();
+    /*
+    .event_types(EventTypeFlags::READY
+        | EventTypeFlags::INTERACTION_CREATE
+        | EventTypeFlags::VOICE_STATE_UPDATE
+        | EventTypeFlags::VOICE_SERVER_UPDATE)*/
+    .build();
     let mut shard = Shard::with_config(ShardId::ONE, shard_config);
 
     // create http client
@@ -54,11 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     // create cache
     let cache = Arc::new(InMemoryCache::builder().message_cache_size(10).build());
 
-    let queue_server = wait_for_ready(
-        &mut shard,
-        &cache,
-        &http_client,
-    ).await?;
+    let queue_server = wait_for_ready(&mut shard, &cache, &http_client).await?;
 
     loop {
         let ev = match shard.next_event().await {
@@ -79,17 +71,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         match ev {
             //Event::Ready(ready) => { }
             Event::InteractionCreate(mut interaction) => {
-                match interaction.data.take() {
-                    Some(InteractionData::ApplicationCommand(data)) => {
-                        handle_command(
-                            &queue_server,
-                            interaction.0,
-                            data
-                        ).await;
-                    }
-                    _ => ()
+                if let Some(InteractionData::ApplicationCommand(data)) = interaction.data.take() {
+                    handle_command(&queue_server, interaction.0, data).await;
                 }
-            }
+            },
             Event::VoiceStateUpdate(ev) => {
                 queue_server.voice_state_update(ev).await;
             }
@@ -136,72 +121,85 @@ async fn handle_command(
             let playnow = matches!(&*data.name, "playnow");
 
             // send to the queue
-            queue_server.command(
-                guild_id,
-                music::Command {
-                    data: command_data,
-                    action: music::Action::Play(query, playnow),
-                },
-            ).await;
+            queue_server
+                .command(
+                    guild_id,
+                    music::Command {
+                        data: command_data,
+                        action: music::Action::Play(query, playnow),
+                    },
+                )
+                .await;
         }
         "skip" => {
             // send to the queue
-            queue_server.command(
-                guild_id,
-                music::Command {
-                    data: command_data,
-                    action: music::Action::Skip,
-                },
-            ).await;
+            queue_server
+                .command(
+                    guild_id,
+                    music::Command {
+                        data: command_data,
+                        action: music::Action::Skip,
+                    },
+                )
+                .await;
         }
         "queue" => {
             // send to the queue
-            queue_server.command(
-                guild_id,
-                music::Command {
-                    data: command_data,
-                    action: music::Action::Queue,
-                },
-            ).await;
+            queue_server
+                .command(
+                    guild_id,
+                    music::Command {
+                        data: command_data,
+                        action: music::Action::Queue,
+                    },
+                )
+                .await;
         }
         "shuffle" => {
             // send to the queue
-            queue_server.command(
-                guild_id,
-                music::Command {
-                    data: command_data,
-                    action: music::Action::Shuffle,
-                },
-            ).await;
+            queue_server
+                .command(
+                    guild_id,
+                    music::Command {
+                        data: command_data,
+                        action: music::Action::Shuffle,
+                    },
+                )
+                .await;
         }
         "disconnect" => {
             // send to the queue
-            queue_server.command(
-                guild_id,
-                music::Command {
-                    data: command_data,
-                    action: music::Action::Disconnect,
-                },
-            ).await;
+            queue_server
+                .command(
+                    guild_id,
+                    music::Command {
+                        data: command_data,
+                        action: music::Action::Disconnect,
+                    },
+                )
+                .await;
         }
         "autodisconnect" => {
-            let option = if data.options.len() > 0 {
-                Some(data
-                    .options
-                    .cast::<bool>(0)
-                    .expect("invalid command schema"))
+            let option = if !data.options.is_empty() {
+                Some(
+                    data.options
+                        .cast::<bool>(0)
+                        .expect("invalid command schema"),
+                )
             } else {
                 None
             };
 
             // send to the queue
-            queue_server.command(
-                guild_id,
-                music::Command {
-                    data: command_data,
-                    action: music::Action::AutoDisconnect(option),
-                },
-            ).await;
+            queue_server
+                .command(
+                    guild_id,
+                    music::Command {
+                        data: command_data,
+                        action: music::Action::AutoDisconnect(option),
+                    },
+                )
+                .await;
         }
         // ignore missing commands
         name => {

@@ -1,8 +1,8 @@
 //! Offloads query work to other tasks.
-//! 
+//!
 //! `youtube-dl` takes a notoriously long time to query youtube for track info.
 
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use twilight_http::Client as HttpClient;
 
@@ -37,7 +37,7 @@ where
     }
 
     /// Enqueues a new task on the query queue.
-    /// 
+    ///
     /// When the result is ready, it will be retrieved with
     /// [`QueryQueue::next`].
     pub async fn enqueue<F, Fut>(&self, data: CommandData, task: F)
@@ -63,24 +63,21 @@ async fn process<F, Fut, T>(
     http_client: Arc<HttpClient>,
     query_tx: UnboundedSender<QueryResult<T>>,
     task: F,
-)
-where
+) where
     F: FnOnce(&CommandData) -> Fut + Send + 'static,
     Fut: Future<Output = T> + Send + 'static,
 {
     // ack response
-    data
-        .respond(&http_client)
-        .ack()
-        .await
-        .unwrap();
+    data.respond(&http_client).ack().await.unwrap();
 
     let result = task(&data).await;
 
-    query_tx.send(QueryResult {
-        data,
-        message: result,
-    }).unwrap();
+    query_tx
+        .send(QueryResult {
+            data,
+            message: result,
+        })
+        .unwrap();
 }
 
 #[derive(Debug)]

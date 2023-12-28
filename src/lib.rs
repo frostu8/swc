@@ -6,7 +6,9 @@ pub mod music;
 pub mod voice;
 pub mod ytdl;
 
-use twilight_model::application::command::{Command, CommandType, CommandOption, CommandOptionType};
+use twilight_model::application::command::{
+    Command, CommandOption, CommandOptionType, CommandType,
+};
 use twilight_model::id::Id;
 
 /// Returns a chat command with a name and description.
@@ -26,10 +28,7 @@ use twilight_model::id::Id;
 ///     ..command("play", "plays a track")
 /// };
 /// ```
-pub fn command(
-    name: impl Into<String>,
-    description: impl Into<String>,
-) -> Command {
+pub fn command(name: impl Into<String>, description: impl Into<String>) -> Command {
     Command {
         application_id: None,
         default_member_permissions: None,
@@ -75,26 +74,38 @@ pub fn command_option(
 pub fn commands() -> Vec<Command> {
     vec![
         Command {
-            options: vec![
-                command_option(CommandOptionType::String, "query", "the url or query of the track"),
-            ],
+            options: vec![command_option(
+                CommandOptionType::String,
+                "query",
+                "the url or query of the track",
+            )],
             ..command("play", "play a music track")
         },
         Command {
-            options: vec![
-                command_option(CommandOptionType::String, "query", "the url or query of the track"),
-            ],
-            ..command("playnow", "play a music track and moves it to the top of the queue")
+            options: vec![command_option(
+                CommandOptionType::String,
+                "query",
+                "the url or query of the track",
+            )],
+            ..command(
+                "playnow",
+                "play a music track and moves it to the top of the queue",
+            )
         },
         command("skip", "skips the currently playing song"),
         command("queue", "lists the current music queue"),
         command("shuffle", "shuffles the music queue"),
         command("disconnect", "disconnects the music bot"),
         Command {
-            options: vec![
-                command_option(CommandOptionType::Boolean, "setting", "whether to autodisconnect or not"),
-            ],
-            ..command("autodisconnect", "sets the autodisconnect setting; omit setting to toggle")
+            options: vec![command_option(
+                CommandOptionType::Boolean,
+                "setting",
+                "whether to autodisconnect or not",
+            )],
+            ..command(
+                "autodisconnect",
+                "sets the autodisconnect setting; omit setting to toggle",
+            )
         },
     ]
 }

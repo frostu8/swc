@@ -1,9 +1,9 @@
 //! Voice errors.
 
-use super::{source, rtp, ws};
+use super::{rtp, source, ws};
 
-use std::fmt::{self, Display, Formatter};
 use std::error::Error as StdError;
+use std::fmt::{self, Display, Formatter};
 
 /// Any error that can occur with voice interactions.
 #[derive(Debug)]

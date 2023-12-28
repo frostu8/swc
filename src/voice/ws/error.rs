@@ -1,10 +1,8 @@
 //! Connection error.
 
 use std::fmt::{self, Debug, Display, Formatter};
+use tungstenite::error::{Error as WsError, ProtocolError as WsProtocolError};
 use tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
-use tungstenite::error::{
-    Error as WsError, ProtocolError as WsProtocolError,
-};
 
 use super::rtp::IpDiscoveryError;
 
@@ -32,8 +30,9 @@ impl Error {
     pub fn can_resume(&self) -> bool {
         match self {
             Error::Api(err) => matches!(err.code, Code::VoiceServerCrashed),
-            Error::Ws(WsError::Protocol(p)) =>
-                matches!(p, WsProtocolError::ResetWithoutClosingHandshake),
+            Error::Ws(WsError::Protocol(p)) => {
+                matches!(p, WsProtocolError::ResetWithoutClosingHandshake)
+            }
             _ => false,
         }
     }
@@ -88,7 +87,7 @@ impl std::error::Error for Error {
 #[derive(Debug)]
 pub enum ProtocolError {
     /// Payload failed to decode.
-    /// 
+    ///
     /// Contains the original payload.
     Deser(serde_json::Error, String),
     /// Payload failed to encode
@@ -104,10 +103,10 @@ impl Display for ProtocolError {
         match self {
             ProtocolError::Deser(err, msg) => {
                 write!(f, "failed to parse message \"{}\": {}", msg, err)
-            },
+            }
             ProtocolError::Ser(err) => {
                 write!(f, "failed to create json: {}", err)
-            },
+            }
             ProtocolError::UnsupportedEncryptionMode(mode) => {
                 write!(f, "unsupported encryption mode \"{}\"", mode)
             }

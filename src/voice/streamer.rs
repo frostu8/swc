@@ -1,12 +1,12 @@
 //! Audio streamer.
 
-use super::constants::{TIMESTEP_LENGTH, VOICE_PACKET_MAX, SILENCE_FRAME};
-use super::rtp::{Socket, Packet};
-use super::{Source, Error};
+use super::constants::{SILENCE_FRAME, TIMESTEP_LENGTH, VOICE_PACKET_MAX};
+use super::rtp::{Packet, Socket};
+use super::{Error, Source};
 
-use tracing::{warn, debug_span};
+use tracing::{debug_span, warn};
 
-use tokio::time::{Instant, Duration, sleep_until, timeout_at};
+use tokio::time::{sleep_until, timeout_at, Duration, Instant};
 
 /// Audio packet streamer.
 ///
@@ -74,10 +74,7 @@ impl PacketStreamer {
     ///
     /// This future is intended to be cancelled, as it will not return unless
     /// there's an error or the status of packet flow changes.
-    pub async fn stream(
-        &mut self,
-        rtp: &mut Socket,
-    ) -> Result<Status, Error> {
+    pub async fn stream(&mut self, rtp: &mut Socket) -> Result<Status, Error> {
         loop {
             if self.ready {
                 let span = debug_span!("send packet");
@@ -90,7 +87,7 @@ impl PacketStreamer {
 
                 // setup for next packet
                 self.packet = Packet::default();
-                // TODO: For reasons far beyond my reasoning or comprehension,
+                // FIXED: For reasons far beyond my reasoning or comprehension,
                 // the normal timestep for sending packets of, y'know, 20ms,
                 // makes the Opus audio run fast, just fast enough to create
                 // artifacts that skip frames and audibly alter the tempo. I
@@ -133,13 +130,11 @@ impl PacketStreamer {
                 //
                 // It is little inconsistencies like this that remind me that
                 // WSL will never be a perfect emulaion of Linux.
-                self.next_packet = self.next_packet + TIMESTEP_LENGTH;
+                self.next_packet += TIMESTEP_LENGTH;
                 //self.next_packet = self.next_packet + TIMESTEP_LENGTH + Duration::from_micros(1450);
                 self.ready = false;
-            } else {
-                if let Some(status) = self.next(rtp.ssrc()).await? {
-                    return Ok(status);
-                }
+            } else if let Some(status) = self.next(rtp.ssrc()).await? {
+                return Ok(status);
             }
         }
     }
@@ -153,8 +148,7 @@ impl PacketStreamer {
             self.silence_frames -= 1;
 
             // copy silence frame
-            (&mut self.packet.payload_mut()[..SILENCE_FRAME.len()])
-                .copy_from_slice(SILENCE_FRAME);
+            self.packet.payload_mut()[..SILENCE_FRAME.len()].copy_from_slice(SILENCE_FRAME);
 
             self.packet.set_payload_len(SILENCE_FRAME.len());
             self.ready = true;
@@ -197,7 +191,8 @@ impl PacketStreamer {
             let res = timeout_at(
                 self.next_packet + self.patience,
                 source.read(self.packet.payload_mut()),
-            ).await;
+            )
+            .await;
 
             match res {
                 Ok(Ok(len)) => (len, false),
@@ -209,7 +204,7 @@ impl PacketStreamer {
                     self.wait_for_source();
 
                     // exit so we can start playing the silence frames
-                    return Ok(None)
+                    return Ok(None);
                 }
             }
         };
@@ -255,4 +250,3 @@ pub enum Status {
     /// The source that was playing has stopped.
     SourceStopped,
 }
-

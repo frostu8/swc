@@ -1,7 +1,7 @@
 //! RTP/UDP errors.
 
-use std::fmt::{self, Display, Formatter};
 use std::error::Error as StdError;
+use std::fmt::{self, Display, Formatter};
 
 use xsalsa20poly1305::aead::Error as CryptoError;
 

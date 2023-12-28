@@ -2,7 +2,7 @@
 //!
 //! Currently, this only supports ffmpeg and ytdl queries through an ffmpeg
 //! pipe.
-//! 
+//!
 //! These should not be doing any super heavy CPU-bound work, as this runs on
 //! the player thread. All of these features are cancel-safe.
 
@@ -10,13 +10,13 @@ use super::constants::{DEFAULT_BITRATE, SAMPLE_RATE, STEREO_FRAME_SIZE};
 
 use crate::ytdl::YtdlError;
 
-use tokio::process::{Child, Command};
 use tokio::io::AsyncReadExt;
+use tokio::process::{Child, Command};
 
-use std::process::Stdio;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::process::Stdio;
 
-use opus::{Application, Encoder, Channels};
+use opus::{Application, Channels, Encoder};
 
 /// A ytdl audio source.
 ///
@@ -56,7 +56,10 @@ impl Source {
 
         if self.buf_len > 0 {
             // encode
-            let len = self.coder.encode_float(&self.buf[..self.buf_len], buf).map_err(Error::Codec)?;
+            let len = self
+                .coder
+                .encode_float(&self.buf[..self.buf_len], buf)
+                .map_err(Error::Codec)?;
             self.buf_len = 0;
             Ok(len)
         } else {
@@ -92,7 +95,7 @@ impl Source {
     ///         "-o",
     ///         "-",
     ///     ])
-    ///     // remember to set stdout to piped! 
+    ///     // remember to set stdout to piped!
     ///     .stdout(Stdio::piped())
     ///     .stderr(Stdio::inherit())
     ///     .spawn()
@@ -102,7 +105,7 @@ impl Source {
         let piped_stdio: Stdio = piped.stdout.take().unwrap().try_into().unwrap();
 
         let ffmpeg = Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-i",
                 "pipe:0",
                 "-ac",
@@ -123,11 +126,8 @@ impl Source {
             .spawn()
             .map_err(Error::Io)?;
 
-        let mut coder = Encoder::new(
-            SAMPLE_RATE as u32,
-            Channels::Stereo,
-            Application::Audio,
-        ).map_err(Error::Codec)?;
+        let mut coder = Encoder::new(SAMPLE_RATE as u32, Channels::Stereo, Application::Audio)
+            .map_err(Error::Codec)?;
         coder.set_bitrate(DEFAULT_BITRATE).map_err(Error::Codec)?;
 
         Ok(Source {
@@ -142,7 +142,7 @@ impl Source {
     /// Creates a new `Source` from a `ytdl` query.
     pub fn ytdl(query: &str) -> Result<Source, Error> {
         let ytdl = Command::new(crate::ytdl::ytdl_executable())
-            .args(&[
+            .args([
                 "-f",
                 "webm[abr>0]/bestaudio/best",
                 "-R",
@@ -197,4 +197,3 @@ impl std::error::Error for Error {
         }
     }
 }
-

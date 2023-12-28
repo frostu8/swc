@@ -12,39 +12,42 @@ pub use commands::{Action, Command, CommandData};
 
 use query::{QueryQueue, QueryResult as QueryMessage};
 use rand::SeedableRng;
-use tokio::time::{Instant, sleep_until};
-use tracing::{instrument, error, debug};
-use twilight_model::channel::message::Embed;
+use tokio::time::{sleep_until, Instant};
+use tracing::{debug, error, instrument};
 use twilight_model::channel::message::embed::EmbedThumbnail;
+use twilight_model::channel::message::Embed;
 
-use std::sync::Arc;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Display, Formatter, Write as _};
 use std::iter::once;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rand::{rngs::SmallRng, seq::SliceRandom};
 
-use tokio::task::JoinHandle;
 use tokio::sync::{
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
     RwLockReadGuard,
-    mpsc::{self, UnboundedSender, UnboundedReceiver},
 };
+use tokio::task::JoinHandle;
 
 use super::voice::{self, Player, Source};
 
-use crate::ytdl::{Query as YtdlQuery, Track, QueryError};
+use crate::ytdl::{Query as YtdlQuery, QueryError, Track};
 
+use twilight_cache_inmemory::InMemoryCache;
 use twilight_gateway::MessageSender as GatewayMessageSender;
 use twilight_http::Client as HttpClient;
-use twilight_cache_inmemory::InMemoryCache;
 use twilight_model::{
-    voice::VoiceState,
     gateway::payload::{
         incoming::{VoiceServerUpdate, VoiceStateUpdate},
         outgoing::UpdateVoiceState,
     },
-    id::{Id, marker::{ChannelMarker, GuildMarker, UserMarker}},
+    id::{
+        marker::{ChannelMarker, GuildMarker, UserMarker},
+        Id,
+    },
+    voice::VoiceState,
 };
 
 use tokio::sync::RwLock;
@@ -89,7 +92,8 @@ impl QueueServer {
     ) {
         self.with_queue(guild_id.into(), |queue| {
             let _ = queue.command_tx.send(command);
-        }).await;
+        })
+        .await;
     }
 
     /// Processes a voice state update event from the gateway.
@@ -100,14 +104,16 @@ impl QueueServer {
 
         self.with_queue(guild_id, |queue| {
             let _ = queue.gateway_tx.send(GatewayEvent::VoiceStateUpdate(ev));
-        }).await;
+        })
+        .await;
     }
 
     /// Processes a voice server update event from the gateway.
     pub async fn voice_server_update(self: &Arc<QueueServer>, ev: VoiceServerUpdate) {
         self.with_queue(ev.guild_id, |queue| {
             let _ = queue.gateway_tx.send(GatewayEvent::VoiceServerUpdate(ev));
-        }).await;
+        })
+        .await;
     }
 
     /// Gets a currently running queue or starts a new queue.
@@ -153,10 +159,7 @@ enum GatewayEvent {
 
 impl Queue {
     /// Spins up a new queue task.
-    pub fn new(
-        queue_server: Arc<QueueServer>,
-        guild_id: impl Into<Id<GuildMarker>>,
-    ) -> Queue {
+    pub fn new(queue_server: Arc<QueueServer>, guild_id: impl Into<Id<GuildMarker>>) -> Queue {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (gateway_tx, gateway_rx) = mpsc::unbounded_channel();
 
@@ -253,17 +256,13 @@ impl QueueState {
             }
         }
 
-        self.query_queue.enqueue(
-            command.clone(),
-            move |_| async move {
+        self.query_queue
+            .enqueue(command.clone(), move |_| async move {
                 YtdlQuery::query(&query)
                     .await
-                    .map(|query| QueryInfo {
-                        query,
-                        playnow,
-                    })
-            }
-        ).await;
+                    .map(|query| QueryInfo { query, playnow })
+            })
+            .await;
 
         Ok(())
     }
@@ -302,10 +301,14 @@ impl QueueState {
 
         // construct queue
         for (i, track) in self.track_queue.iter().enumerate().take(10) {
-            write!(&mut description, "\n{}. [{}]({})",
+            write!(
+                &mut description,
+                "\n{}. [{}]({})",
                 i + 1,
                 track.title,
-                track.url).unwrap();
+                track.url
+            )
+            .unwrap();
         }
 
         if self.track_queue.len() > 10 {
@@ -329,17 +332,14 @@ impl QueueState {
                 .as_ref()
                 .and_then(|playing| playing.thumbnail_url.clone())
                 .map(|url| EmbedThumbnail {
-                    url: url,
+                    url,
                     height: None,
                     width: None,
                     proxy_url: None,
                 }),
             timestamp: None,
             title: None,
-            url: self
-                .playing
-                .as_ref()
-                .map(|playing| playing.url.clone()),
+            url: self.playing.as_ref().map(|playing| playing.url.clone()),
             video: None,
         };
 
@@ -352,10 +352,7 @@ impl QueueState {
         Ok(())
     }
 
-    async fn shuffle(
-        &mut self,
-        command: &CommandData,
-    ) -> Result<(), UserError> {
+    async fn shuffle(&mut self, command: &CommandData) -> Result<(), UserError> {
         self.check_user_in_channel(command.user_id).await?;
 
         let queue_slice = self.track_queue.make_contiguous();
@@ -371,10 +368,7 @@ impl QueueState {
         Ok(())
     }
 
-    async fn command_disconnect(
-        &mut self,
-        command: &CommandData,
-    ) -> Result<(), UserError> {
+    async fn command_disconnect(&mut self, command: &CommandData) -> Result<(), UserError> {
         self.check_user_in_channel(command.user_id).await?;
 
         self.disconnect().await;
@@ -403,8 +397,11 @@ impl QueueState {
         self.autodisconnect.enabled = enabled;
 
         let msg = if enabled {
-            format!("autodisconnect has been enabled, \
-                will autodisconnect after {:?}", AUTODISCONNECT_TIME)
+            format!(
+                "autodisconnect has been enabled, \
+                will autodisconnect after {:?}",
+                AUTODISCONNECT_TIME
+            )
         } else {
             String::from("autodisconnect has been disabled")
         };
@@ -419,14 +416,11 @@ impl QueueState {
     }
 
     /// Checks if a user can use a music control command.
-    /// 
+    ///
     /// A user can use a music control command if the user is in the same
     /// channel as the bot.
     #[instrument(name = "check_user_in_channel", skip(self))]
-    async fn check_user_in_channel(
-        &self,
-        user_id: Id<UserMarker>,
-    ) -> Result<(), UserError>{
+    async fn check_user_in_channel(&self, user_id: Id<UserMarker>) -> Result<(), UserError> {
         let user_channel_id = self
             .queue_server
             .cache
@@ -469,12 +463,7 @@ impl QueueState {
     }
 
     /// Executes the final result of a play command and their query.
-    async fn play_after_query(
-        &mut self,
-        command: &CommandData,
-        query: YtdlQuery,
-        playnow: bool,
-    ) {
+    async fn play_after_query(&mut self, command: &CommandData, query: YtdlQuery, playnow: bool) {
         match query {
             YtdlQuery::Track(track) => {
                 let _ = command
@@ -514,10 +503,10 @@ impl QueueState {
     }
 
     /// Enqueues a track onto the player.
-    /// 
+    ///
     /// Starts playing the song immediately if there is no song playing.
     /// Otherwise, enqueue the track on the queue.
-    /// 
+    ///
     /// To enqueue one track, use [`std::iter::once`].
     pub fn place_tracks(&mut self, tracks: impl IntoIterator<Item = Track>) {
         let mut tracks = tracks.into_iter();
@@ -529,10 +518,10 @@ impl QueueState {
     }
 
     /// Enqueues a track onto the player at the front.
-    /// 
+    ///
     /// Starts playing the song immediately if there is no song playing.
     /// Otherwise, enqueue the track on the queue.
-    /// 
+    ///
     /// To enqueue one track, use [`std::iter::once`].
     pub fn place_tracks_front(&mut self, tracks: impl IntoIterator<Item = Track>) {
         let mut tracks = tracks.into_iter();
@@ -621,9 +610,12 @@ impl QueueState {
         // update voice state
         self.queue_server
             .gateway
-            .command(
-                &UpdateVoiceState::new(self.guild_id, channel_id, false, false),
-            )
+            .command(&UpdateVoiceState::new(
+                self.guild_id,
+                channel_id,
+                false,
+                false,
+            ))
             .unwrap();
     }
 
@@ -642,9 +634,7 @@ impl QueueState {
 
         self.queue_server
             .gateway
-            .command(
-                &UpdateVoiceState::new(self.guild_id, None, false, false),
-            )
+            .command(&UpdateVoiceState::new(self.guild_id, None, false, false))
             .unwrap();
     }
 
@@ -658,10 +648,7 @@ impl QueueState {
         };
 
         // count all users in channel
-        let voice_states = self
-            .queue_server
-            .cache
-            .voice_channel_states(channel_id);
+        let voice_states = self.queue_server.cache.voice_channel_states(channel_id);
 
         let Some(voice_states) = voice_states else {
             return;
@@ -683,10 +670,7 @@ impl QueueState {
     }
 
     fn unwrap_player(&self) -> &Player {
-        let PlayerState { player, .. } = self
-            .player
-            .as_ref()
-            .expect("audio player");
+        let PlayerState { player, .. } = self.player.as_ref().expect("audio player");
 
         player
     }
@@ -694,16 +678,9 @@ impl QueueState {
     fn start_player(&mut self) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        let player = Player::new(
-            self.queue_server.user_id,
-            self.guild_id,
-            event_tx,
-        );
+        let player = Player::new(self.queue_server.user_id, self.guild_id, event_tx);
 
-        self.player = Some(PlayerState {
-            player,
-            event_rx,
-        });
+        self.player = Some(PlayerState { player, event_rx });
     }
 }
 
@@ -828,10 +805,11 @@ async fn queue_run(mut state: QueueState) {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 enum UserError {
     UserInDifferentChannel,
     UserNotInChannel,
-    BotNotInChannel(Id<ChannelMarker>)
+    BotNotInChannel(Id<ChannelMarker>),
 }
 
 impl Display for UserError {
@@ -839,14 +817,14 @@ impl Display for UserError {
         match self {
             UserError::UserInDifferentChannel => f.write_str(
                 "you must be in the same voice channel as the bot to use \
-                    this!"
+                    this!",
             ),
-            UserError::UserNotInChannel => f.write_str(
-                "you must be in a voice channel to use this!"
-            ),
-            UserError::BotNotInChannel(_) => f.write_str(
-                "the bot must be in a voice channel to use this!"
-            ),
+            UserError::UserNotInChannel => {
+                f.write_str("you must be in a voice channel to use this!")
+            }
+            UserError::BotNotInChannel(_) => {
+                f.write_str("the bot must be in a voice channel to use this!")
+            }
         }
     }
 }

@@ -5,13 +5,12 @@ pub mod payload;
 
 pub use error::Error;
 
+use super::rtp::{self, Encryptor, Socket};
 use error::{ApiError, ProtocolError};
 use payload::{
-    ClientDisconnect, ClientConnect, EncryptionMode, GatewayEvent, Heartbeat,
-    Hello, Identify, Ready, Resume, SelectProtocol, SelectProtocolData,
-    SessionDescription, Speaking,
+    ClientConnect, ClientDisconnect, EncryptionMode, GatewayEvent, Heartbeat, Hello, Identify,
+    Ready, Resume, SelectProtocol, SelectProtocolData, SessionDescription, Speaking,
 };
-use super::rtp::{self, Socket, Encryptor};
 
 use tokio::net::UdpSocket;
 use tokio::time::{sleep_until, Duration, Instant};
@@ -22,7 +21,7 @@ use async_tungstenite::{
 };
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::de::DeserializeSeed as _;
-use tungstenite::protocol::{Message, CloseFrame};
+use tungstenite::protocol::{CloseFrame, Message};
 use twilight_model::id::{
     marker::{GuildMarker, UserMarker},
     Id,
@@ -31,7 +30,7 @@ use twilight_model::id::{
 use std::borrow::Cow;
 use std::fmt::Debug;
 
-use tracing::{instrument, warn, error, info, debug, debug_span};
+use tracing::{debug, debug_span, error, info, instrument, warn};
 
 /// Unmanaged voice connection to a websocket.
 ///
@@ -122,12 +121,10 @@ impl Connection {
 
         match send(&mut self.wss, &ev).await {
             Ok(()) => Ok(()),
-            Err(err) if err.can_resume() => {
-                match self.resume().await {
-                    Ok(()) => send(&mut self.wss, &ev).await,
-                    Err(err) => return Err(err),
-                }
-            }
+            Err(err) if err.can_resume() => match self.resume().await {
+                Ok(()) => send(&mut self.wss, &ev).await,
+                Err(err) => return Err(err),
+            },
             Err(err) => Err(err),
         }
     }
@@ -291,7 +288,8 @@ impl Connection {
     /// [1]: https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
     #[instrument(name = "voice_resume", skip(self))]
     async fn resume(&mut self) -> Result<(), Error> {
-        let (wss, _response) = connect_async(format!("wss://{}/?v=4", self.session.endpoint)).await?;
+        let (wss, _response) =
+            connect_async(format!("wss://{}/?v=4", self.session.endpoint)).await?;
 
         debug!("got new connection");
         self.wss = wss;
@@ -329,16 +327,19 @@ impl Connection {
     }
 
     /// Disconnects gracefully from the gateway.
-    /// 
+    ///
     /// The websocket should not be used after this.
-    /// 
+    ///
     /// # Panics
     /// Panics if closing the socket failed.
     pub async fn disconnect(&mut self) {
-        self.wss.close(Some(CloseFrame {
-            code: tungstenite::protocol::frame::coding::CloseCode::Normal,
-            reason: Cow::Borrowed("Disconnected from gateway"),
-        })).await.unwrap();
+        self.wss
+            .close(Some(CloseFrame {
+                code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+                reason: Cow::Borrowed("Disconnected from gateway"),
+            }))
+            .await
+            .unwrap();
     }
 }
 
@@ -359,7 +360,9 @@ async fn recv(
                             match event.deserialize(&mut json) {
                                 Ok(event) => return Some(Ok(event)),
                                 Err(err) => {
-                                    return Some(Err(Error::Protocol(ProtocolError::Deser(err, msg))))
+                                    return Some(Err(Error::Protocol(ProtocolError::Deser(
+                                        err, msg,
+                                    ))))
                                 }
                             }
                         }
